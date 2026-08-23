@@ -387,13 +387,53 @@ File cấu hình chính của máy chủ SSH nằm tại: `/etc/ssh/sshd_config`
 └───────────────────────────┴───────────────────┴─────────────────────────────┘
 ```
 
-### 8.1. Quy tắc sống còn chống bị "Khóa ngoài cửa" (Lockout Prevention)
+### 8.1. Lưu ý quan trọng: Thay đổi Port trên Ubuntu 22.10 / 24.04+ với `ssh.socket`
+
+Trên các phiên bản Ubuntu mới (Ubuntu 22.10, 24.04 LTS trở lên), OpenSSH mặc định được quản lý qua cơ chế **Systemd Socket-Activated (`ssh.socket`)** thay vì service truyền thống. Do đó, nếu bạn chỉ đổi `Port 2222` trong `/etc/ssh/sshd_config` thì port lắng nghe vẫn sẽ giữ nguyên ở cổng 22!
+
+**Để đổi Port SSH chuẩn xác:**
+
+* **Cách 1: Ghi đè cấu hình `ssh.socket` (Chuẩn khuyến nghị cho Ubuntu 24.04):**
+  ```bash
+  # 1. Tạo thư mục override cấu hình cho socket
+  sudo mkdir -p /etc/systemd/system/ssh.socket.d
+
+  # 2. Tạo file ghi đè cổng lắng nghe (ví dụ đổi sang port 2222)
+  sudo tee /etc/systemd/system/ssh.socket.d/listen.conf << 'EOF'
+  [Socket]
+  ListenStream=
+  ListenStream=2222
+  EOF
+
+  # 3. Nạp lại cấu hình systemd daemon và restart socket
+  sudo systemctl daemon-reload
+  sudo systemctl restart ssh.socket
+  ```
+
+* **Cách 2: Chuyển hẳn về quản lý bằng `ssh.service` truyền thống:**
+  ```bash
+  # Tắt socket activation và kích hoạt service độc lập
+  sudo systemctl disable --now ssh.socket
+  sudo systemctl enable --now ssh.service
+
+  # Sau đó chỉnh 'Port 2222' trong /etc/ssh/sshd_config, nạp lại và restart
+  sudo systemctl daemon-reload
+  sudo systemctl restart ssh.service
+  ```
+
+* **Kiểm tra kết quả đổi Port:**
+  ```bash
+  sudo ss -tulpn | grep ssh
+  # Quan sát thấy cổng lắng nghe đã chuyển thành: 0.0.0.0:2222
+  ```
+
+### 8.2. Quy tắc sống còn chống bị "Khóa ngoài cửa" (Lockout Prevention)
 
 > [!CAUTION]
 > **Quy tắc vàng của Quản trị viên hệ thống:**
 > Khi chỉnh sửa file `/etc/ssh/sshd_config` (đặc biệt là khi đổi Port hoặc tắt `PasswordAuthentication`):
 > 1. **KHÔNG BAO GIỜ** đóng cửa sổ Terminal đang SSH hiện tại!
-> 2. Mở một **cửa sổ Terminal MỚI** trên máy Mac và thử kết nối: `ssh my-server`.
+> 2. Mở một **cửa sổ Terminal MỚI** trên máy Mac và thử kết nối với cổng mới: `ssh -p 2222 my-server` (hoặc cập nhật `Port 2222` trong file `~/.ssh/config`).
 > 3. Chỉ khi nào cửa sổ mới đăng nhập thành công 100% thì bạn mới được đóng cửa sổ cũ. Nếu có lỗi, bạn vẫn còn cửa sổ cũ để sửa lại cấu hình và cứu server!
 
 ---
