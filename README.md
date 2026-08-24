@@ -147,7 +147,6 @@ flowchart TD
   - Thiết lập file cấu hình `~/.ssh/config` trên máy Mac để đăng nhập 1 chạm (`ssh myserver`).
 
 ---
-
 ### 📍 [Phần 06: Networking (Quản Trị Mạng & Netplan)](./docs/06-networking.md)
 * **Nội dung lý thuyết:**
   - Khái niệm địa chỉ IP (IPv4/IPv6), Subnet Mask, Gateway, DNS, Port, Localhost/Loopback.
