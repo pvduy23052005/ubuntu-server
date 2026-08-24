@@ -55,7 +55,44 @@ multipass launch 24.04 --name ubuntu-lab --cpus 2 --memory 2G --disk 10G
 
 ---
 
-## 🗺️ 4. Sơ Đồ Lộ Trình Tổng Quan (17 Giai Đoạn)
+## 🏗️ 4. Sơ Đồ Kiến Trúc Hệ Thống (Cloudflare + Web App + Docker)
+
+Sơ đồ dưới đây mô tả kiến trúc hệ thống tổng quan mà chúng ta sẽ hướng tới triển khai:
+
+![Sơ Đồ Hệ Thống](./system.png)
+
+```mermaid
+flowchart LR
+    User["Người dùng / Browser"] -- "HTTPS\n443" --> Domain["Domain\n(example.com)"]
+    Domain --> CF["Cloudflare\n(CDN / WAF / DDoS Protection)"]
+    CF -- "HTTP/HTTPS\ntới origin\n(80/443)" --> Server
+
+    subgraph Server ["Origin Server - Ubuntu"]
+        direction TB
+        subgraph Docker ["Docker Engine (Docker network)"]
+            direction LR
+            Nginx["Nginx container\n(reverse proxy / web tĩnh)\n[Port container: 80]"]
+            Backend["Backend container\n(API)\n[Port container: 8080]"]
+            MySQL["MySQL container\n(Database)\n[Port container: 3306]"]
+            
+            Nginx -- "proxy tới\nAPI :8080" --> Backend
+            Backend -- "kết nối DB\n:3306" --> MySQL
+        end
+        Vol[("Volume dữ liệu\nMySQL")]
+        MySQL --> Vol
+    end
+```
+
+**✅ Checklist kiểm tra hệ thống:**
+- **DNS:** Trạng thái proxied / DNS-only trên Cloudflare.
+- **Port host:** Các port 80, 443, 8080, 3306.
+- **Docker:** Quản lý bằng `docker ps` / `docker logs`.
+- **Tài nguyên hệ thống:** Kiểm tra `df -h` / `free -h`.
+- **Lưu trữ & Mạng:** Volume & network của Docker.
+
+---
+
+## 🗺️ 5. Sơ Đồ Lộ Trình Tổng Quan (17 Giai Đoạn)
 
 ```mermaid
 flowchart TD
@@ -79,7 +116,7 @@ flowchart TD
 
 ---
 
-## 📚 5. Nội Dung Chi Tiết 17 Phần Học Tập & Thực Hành
+## 📚 6. Nội Dung Chi Tiết 17 Phần Học Tập & Thực Hành
 
 ---
 
@@ -388,7 +425,7 @@ flowchart TD
 
 ---
 
-## 🗂️ 6. Cấu Trúc Thư Mục Repository
+## 🗂️ 7. Cấu Trúc Thư Mục Repository
 
 ```text
 ubuntu-server/
@@ -432,7 +469,7 @@ ubuntu-server/
 
 ---
 
-## ⚡ 7. Bảng Tra Cứu Nhanh Lệnh Multipass (Cheat Sheet)
+## ⚡ 8. Bảng Tra Cứu Nhanh Lệnh Multipass (Cheat Sheet)
 
 | Lệnh | Mô tả chi tiết |
 | :--- | :--- |
