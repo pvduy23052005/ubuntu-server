@@ -59,7 +59,7 @@ multipass launch 24.04 --name ubuntu-lab --cpus 2 --memory 2G --disk 10G
 
 Sơ đồ dưới đây mô tả kiến trúc hệ thống tổng quan mà chúng ta sẽ hướng tới triển khai:
 
-![Sơ Đồ Hệ Thống](./system.png)
+![Sơ Đồ Hệ Thống](./life-request.png)
 
 ```mermaid
 flowchart LR
