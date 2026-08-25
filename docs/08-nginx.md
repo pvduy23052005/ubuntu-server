@@ -12,9 +12,9 @@ Trong kiến trúc triển khai ứng dụng hiện đại, **Nginx** là thành
 
 Sau khi hoàn thành bài học này, bạn sẽ:
 1. **Hiểu rõ bản chất:** Phân biệt được **Web Server** (Nginx) và **Application Server** (Node.js / NestJS / Python).
-2. **Làm chủ Reverse Proxy:** Hiểu tại sao không bao giờ nên mở trực tiếp cổng 3000 của Node.js ra ngoài Internet mà phải thông qua Nginx.
+2. **Làm chủ Reverse Proxy & SSL Termination:** Hiểu tại sao Nginx đứng trước giải mã HTTPS và chuyển tiếp traffic HTTP nội bộ về Node.js (cổng 3000).
 3. **Quản lý cấu hình chuyên nghiệp:** Nắm vững cấu trúc `/etc/nginx/`, cơ chế tách biệt giữa `sites-available` (kho cấu hình) và `sites-enabled` (kích hoạt qua Symlink).
-4. **Phục vụ Static Files & Định tuyến API:** Cấu hình Server Block để phân phối file tĩnh (HTML/CSS/JS) và chuyển tiếp request (`proxy_pass`) tới ứng dụng Backend.
+4. **Phục vụ Static Files & Cấu hình HTTPS:** Cấu hình Server Block phục vụ file tĩnh, tự động chuyển hướng HTTP $\rightarrow$ HTTPS 301 và gán chứng chỉ SSL.
 5. **Thành thạo kỹ năng kiểm tra & Reload không gián đoạn:** Sử dụng `sudo nginx -t` và `sudo systemctl reload nginx` (Zero-downtime).
 6. **Xử lý triệt để 2 lỗi kinh điển:** Giải quyết tận gốc lỗi **`403 Forbidden`** (Permission) và **`502 Bad Gateway`** (Upstream App Down) thông qua phân tích nhật ký `/var/log/nginx/`.
 
@@ -345,15 +345,133 @@ $\rightarrow$ Bạn sẽ nhận được JSON từ Node.js với `client_ip` hi�
 
 ---
 
-## 🔒 6. Quyền Hạn User `www-data` & Xử Lý Lỗi `403 Forbidden`
+## 🔐 6. Cấu Hình HTTPS / SSL Cho Reverse Proxy (SSL Termination)
 
-### 6.1. Tại sao Nginx chạy dưới user `www-data`?
+Trong mô hình thực tế, **Node.js KHÔNG CẦN tự cấu hình HTTPS**. Nginx sẽ đứng phía trước chịu trách nhiệm giải mã toàn bộ HTTPS (gọi là **SSL Termination**), sau đó chuyển tiếp nội bộ qua HTTP thông thường về cho Node.js (cổng `3000`).
+
+```text
+Trình duyệt trên Mac
+       │
+       ├── (HTTP:80) ──► Nginx (Tự động chuyển hướng Redirect 301 sang HTTPS)
+       │
+       └── (HTTPS:443 Mã hóa SSL) ──► Nginx (Giải mã SSL / SSL Termination)
+                                        │
+                                        │ (proxy_pass qua HTTP nội bộ cực nhanh)
+                                        ▼
+                             Node.js App (127.0.0.1:3000)
+```
+
+---
+
+### Bước 6.1: Tạo cặp chứng chỉ SSL tự ký (Self-Signed) trên Ubuntu
+
+Trong môi trường Lab nội bộ (truy cập qua IP máy ảo Multipass), ta sử dụng `openssl` để sinh chứng chỉ SSL:
+
+```bash
+# 1. Tạo thư mục chứa chứng chỉ
+sudo mkdir -p /etc/nginx/ssl
+
+# 2. Sinh Private Key và Certificate có hạn 365 ngày
+sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /etc/nginx/ssl/server.key \
+  -out /etc/nginx/ssl/server.crt \
+  -subj "/C=VN/ST=Hanoi/L=Hanoi/O=DevOpsLab/CN=192.168.64.2"
+
+# 3. Phân quyền bảo mật cho file khóa
+sudo chmod 600 /etc/nginx/ssl/server.key
+sudo chmod 644 /etc/nginx/ssl/server.crt
+```
+
+---
+
+### Bước 6.2: Cấu hình Server Block hoàn chỉnh (HTTP Redirect + HTTPS Reverse Proxy)
+
+Mở file cấu hình Server Block:
+```bash
+sudo nano /etc/nginx/sites-available/static-site.conf
+```
+
+Cập nhật toàn bộ nội dung thành cấu hình chuẩn Production:
+
+```nginx
+# 1. SERVER BLOCK: Bắt toàn bộ HTTP (Port 80) và Chuyển hướng 301 sang HTTPS
+server {
+    listen 80;
+    server_name _;
+
+    return 301 https://$host$request_uri;
+}
+
+# 2. SERVER BLOCK: Xử lý HTTPS (Port 443) & Reverse Proxy về Node.js (Port 3000)
+server {
+    listen 443 ssl;
+    server_name _;
+
+    # Đường dẫn chứng chỉ SSL
+    ssl_certificate /etc/nginx/ssl/server.crt;
+    ssl_certificate_key /etc/nginx/ssl/server.key;
+
+    # Cấu hình bảo mật giao thức TLS chuẩn hiện đại
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    # Chuyển tiếp tới ứng dụng Node.js
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+
+        # Bộ Headers chuẩn mực
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        
+        # BÁO CHO NODE.JS BIẾT REQUEST GỐC LÀ HTTPS:
+        proxy_set_header X-Forwarded-Proto https;
+
+        proxy_connect_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+}
+```
+
+*Lưu file:* Bấm `Ctrl + O` $\rightarrow$ `Enter`, sau đó `Ctrl + X`.
+
+---
+
+### Bước 6.3: Mở cổng 443 trên Firewall và Reload Nginx
+
+```bash
+# 1. Mở cổng 443 trên UFW
+sudo ufw allow 443/tcp
+
+# 2. Kiểm tra cú pháp Nginx
+sudo nginx -t
+
+# 3. Reload Nginx
+sudo systemctl reload nginx
+```
+
+---
+
+### Bước 6.4: Kiểm chứng kết quả từ máy Mac
+* **Trên trình duyệt:** Gõ `http://192.168.64.2` $\rightarrow$ Trình duyệt tự động nhảy sang `https://192.168.64.2`.
+* **Trên Terminal máy Mac:**
+  ```bash
+  curl -k -I https://192.168.64.2
+  ```
+  *(Cờ `-k` để bỏ qua cảnh báo chứng chỉ tự ký; kết quả trả về `HTTP/1.1 200 OK`).*
+
+---
+
+## 🔒 7. Quyền Hạn User `www-data` & Xử Lý Lỗi `403 Forbidden`
+
+### 7.1. Tại sao Nginx chạy dưới user `www-data`?
 * **Nguyên tắc đặc quyền tối thiểu (Least Privilege):** Nếu Nginx chạy dưới quyền `root`, khi một hacker tìm ra lỗ hổng bảo mật trong Nginx, họ sẽ lập tức kiểm soát toàn bộ máy chủ.
 * Bằng cách gán Nginx chạy dưới user không có quyền quản trị `www-data`, hacker sẽ bị "nhốt" trong phạm vi đọc các file web tĩnh.
 
 ---
 
-### 6.2. Xử lý lỗi `403 Forbidden` (Bị cấm truy cập)
+### 7.2. Xử lý lỗi `403 Forbidden` (Bị cấm truy cập)
 
 * **Triệu chứng:** Mở web thấy báo `403 Forbidden`.
 * **Nguyên nhân phổ biến:**
@@ -371,14 +489,14 @@ $\rightarrow$ Bạn sẽ nhận được JSON từ Node.js với `client_ip` hi�
 
 ---
 
-## 🚨 7. Phân Tích Lỗi `502 Bad Gateway` & Quy Trình Debug Chuyên Nghiệp
+## 🚨 8. Phân Tích Lỗi `502 Bad Gateway` & Quy Trình Debug Chuyên Nghiệp
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                      BẢN CHẤT LỖI 502 BAD GATEWAY                       │
 └────────────────────────────────────┬────────────────────────────────────┘
                                      │
-    Client ──(Gửi Request)──► Nginx (Hoạt động tốt ở Port 80)
+    Client ──(Gửi Request)──► Nginx (Hoạt động tốt ở Port 80/443)
                                      │
                                      │ (Nginx cố gắng kết nối tới 127.0.0.1:3000)
                                      ▼
@@ -388,7 +506,7 @@ $\rightarrow$ Bạn sẽ nhận được JSON từ Node.js với `client_ip` hi�
     Nginx không nhận được phản hồi ──► Báo lỗi: 502 BAD GATEWAY cho Client
 ```
 
-### 7.1. Thực hành tự tạo lỗi `502` và quan sát
+### 8.1. Thực hành tự tạo lỗi `502` và quan sát
 
 **Bước 1: Tắt tiến trình Node.js đang chạy ngầm:**
 ```bash
@@ -396,12 +514,12 @@ $\rightarrow$ Bạn sẽ nhận được JSON từ Node.js với `client_ip` hi�
 pkill -f "node server.js"
 ```
 
-**Bước 2: Mở trình duyệt máy Mac truy cập lại:** `http://192.168.64.2`  
+**Bước 2: Mở trình duyệt máy Mac truy cập lại:** `https://192.168.64.2`  
 $\rightarrow$ Trình duyệt hiển thị ngay lập tức: **`502 Bad Gateway` (Nginx/...)**.
 
 ---
 
-### 7.2. Bộ 5 câu lệnh Debug Nginx kinh điển:
+### 8.2. Bộ 5 câu lệnh Debug Nginx kinh điển:
 
 Khi gặp lỗi web, hãy thực hiện theo đúng 5 bước sau:
 
@@ -438,23 +556,25 @@ $\rightarrow$ Tải lại trang web, lỗi 502 biến mất hoàn toàn!
 
 ---
 
-## 🧪 8. Bài Thực Hành Lab (9 Bước Triển Khai)
+## 🧪 9. Bài Thực Hành Lab (11 Bước Triển Khai Hoàn Chỉnh)
 
-*Hãy thực hiện kịch bản xây dựng Web Server & Reverse Proxy hoàn chỉnh trên Ubuntu Server VM:*
+*Hãy thực hiện kịch bản xây dựng Web Server, Reverse Proxy và HTTPS hoàn chỉnh trên Ubuntu Server VM:*
 
 1. Cài đặt Nginx và xác nhận trạng thái `active (running)`.
 2. Tạo thư mục `/var/www/lab-site` chứa file `index.html`.
 3. Phân quyền sở hữu `www-data:www-data` và quyền `755` cho thư mục.
 4. Tạo Server Block phục vụ static file tại `/etc/nginx/sites-available/lab.conf`.
 5. Kích hoạt website bằng `ln -s` vào `sites-enabled/` và xóa site `default`.
-6. Kiểm tra `sudo nginx -t` và `sudo systemctl reload nginx`.
-7. Khởi chạy ứng dụng Node.js chạy ở cổng `3000`.
-8. Chuyển đổi cấu hình `lab.conf` sang làm **Reverse Proxy** trỏ về `http://127.0.0.1:3000`.
-9. Cố tình tắt Node.js (`pkill node`), quan sát lỗi `502`, đọc log `/var/log/nginx/error.log` và bật lại ứng dụng để khôi phục dịch vụ.
+6. Khởi chạy ứng dụng Node.js chạy ở cổng `3000`.
+7. Chuyển đổi cấu hình `lab.conf` sang làm **Reverse Proxy** trỏ về `http://127.0.0.1:3000`.
+8. Sinh chứng chỉ SSL tự ký bằng `openssl` và lưu vào `/etc/nginx/ssl/`.
+9. Cấu hình chuyển hướng HTTP $\rightarrow$ HTTPS 301 và kích hoạt SSL trên cổng 443.
+10. Mở cổng 443 trên UFW và reload Nginx: `sudo nginx -t && sudo systemctl reload nginx`.
+11. Cố tình tắt Node.js (`pkill node`), quan sát lỗi `502`, đọc log `/var/log/nginx/error.log` và bật lại ứng dụng để khôi phục dịch vụ.
 
 ---
 
-## 📌 9. Bảng Tra Cứu Lệnh Nginx Cốt Lõi
+## 📌 10. Bảng Tra Cứu Lệnh Nginx Cốt Lõi
 
 | Lệnh | Ý nghĩa & Khi nào dùng |
 | :--- | :--- |
@@ -466,3 +586,4 @@ $\rightarrow$ Tải lại trang web, lỗi 502 biến mất hoàn toàn!
 | `sudo tail -f /var/log/nginx/error.log` | Theo dõi và chẩn đoán log lỗi (403, 502, 504) |
 | `sudo ln -s <available> <enabled>` | Kích hoạt một Server Block |
 | `sudo rm /etc/nginx/sites-enabled/<site>` | Hủy kích hoạt một Server Block |
+
