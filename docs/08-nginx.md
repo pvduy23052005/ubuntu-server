@@ -361,12 +361,15 @@ Trình duyệt trên Mac
                              Node.js App (127.0.0.1:3000)
 ```
 
+Tùy thuộc vào môi trường của bạn, hãy chọn phương án phù hợp:
+* **Phương án A (Môi trường Lab nội bộ):** Dùng OpenSSL tạo chứng chỉ tự ký (Self-Signed) khi chỉ có IP máy ảo (ví dụ `192.168.64.2`).
+* **Phương án B (Môi trường Production thực tế):** Dùng **Certbot (Let's Encrypt)** tự động cấp và cấu hình SSL miễn phí 100% khi có Tên miền (Domain).
+
 ---
 
-### Bước 6.1: Tạo cặp chứng chỉ SSL tự ký (Self-Signed) trên Ubuntu
+### 🅰️ Phương Án A: Dùng OpenSSL Self-Signed (Dành Cho Môi Trường Lab / IP VM)
 
-Trong môi trường Lab nội bộ (truy cập qua IP máy ảo Multipass), ta sử dụng `openssl` để sinh chứng chỉ SSL:
-
+#### Bước A.1: Tạo cặp chứng chỉ SSL tự ký
 ```bash
 # 1. Tạo thư mục chứa chứng chỉ
 sudo mkdir -p /etc/nginx/ssl
@@ -382,59 +385,103 @@ sudo chmod 600 /etc/nginx/ssl/server.key
 sudo chmod 644 /etc/nginx/ssl/server.crt
 ```
 
----
-
-### Bước 6.2: Cấu hình Server Block hoàn chỉnh (HTTP Redirect + HTTPS Reverse Proxy)
-
-Mở file cấu hình Server Block:
-```bash
-sudo nano /etc/nginx/sites-available/static-site.conf
-```
-
-Cập nhật toàn bộ nội dung thành cấu hình chuẩn Production:
-
+#### Bước A.2: Cấu hình Server Block thủ công
+Mở file `/etc/nginx/sites-available/static-site.conf`:
 ```nginx
-# 1. SERVER BLOCK: Bắt toàn bộ HTTP (Port 80) và Chuyển hướng 301 sang HTTPS
+# 1. Chuyển hướng toàn bộ HTTP (Port 80) sang HTTPS
 server {
     listen 80;
     server_name _;
-
     return 301 https://$host$request_uri;
 }
 
-# 2. SERVER BLOCK: Xử lý HTTPS (Port 443) & Reverse Proxy về Node.js (Port 3000)
+# 2. Xử lý HTTPS (Port 443) & Reverse Proxy về Node.js (Port 3000)
 server {
     listen 443 ssl;
     server_name _;
 
-    # Đường dẫn chứng chỉ SSL
     ssl_certificate /etc/nginx/ssl/server.crt;
     ssl_certificate_key /etc/nginx/ssl/server.key;
 
-    # Cấu hình bảo mật giao thức TLS chuẩn hiện đại
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers on;
 
-    # Chuyển tiếp tới ứng dụng Node.js
     location / {
         proxy_pass http://127.0.0.1:3000;
-
-        # Bộ Headers chuẩn mực
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        
-        # BÁO CHO NODE.JS BIẾT REQUEST GỐC LÀ HTTPS:
         proxy_set_header X-Forwarded-Proto https;
-
         proxy_connect_timeout 60s;
         proxy_read_timeout 60s;
     }
 }
 ```
 
-*Lưu file:* Bấm `Ctrl + O` $\rightarrow$ `Enter`, sau đó `Ctrl + X`.
+---
+
+### 🅱️ Phương Án B: Dùng Certbot (Let's Encrypt) Chuẩn Production (Khi Có Domain)
+
+> [!IMPORTANT]
+> **Điều kiện tiên quyết để dùng Certbot:**
+> 1. Bạn sở hữu một tên miền thật (ví dụ: `api.yourdomain.com`).
+> 2. Đã trỏ bản ghi **A Record** của tên miền về địa chỉ IP Public của máy chủ.
+> 3. Tường lửa UFW đã mở cả 2 cổng: `sudo ufw allow 80/tcp` và `sudo ufw allow 443/tcp`.
+
+#### Bước B.1: Cài đặt Certbot qua Snap
+```bash
+# 1. Cài đặt snapd và certbot
+sudo apt update
+sudo apt install -y snapd
+sudo snap install --classic certbot
+
+# 2. Tạo symlink để sử dụng lệnh certbot toàn cục
+sudo ln -sf /snap/bin/certbot /usr/bin/certbot
+```
+
+#### Bước B.2: Chuẩn bị Server Block cơ bản với Domain của bạn
+Trước khi chạy Certbot, đảm bảo file cấu hình Nginx (ví dụ `/etc/nginx/sites-available/my-app.conf`) đã khai báo đúng tên miền trong `server_name`:
+
+```nginx
+server {
+    listen 80;
+    server_name api.yourdomain.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+*Kích hoạt và nạp lại Nginx:*
+```bash
+sudo ln -sf /etc/nginx/sites-available/my-app.conf /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+#### Bước B.3: Chạy Certbot tự động cấp SSL & Tự cấu hình Nginx
+Chỉ cần chạy 1 câu lệnh duy nhất:
+
+```bash
+sudo certbot --nginx -d api.yourdomain.com
+```
+
+*Quá trình tự động của Certbot:*
+1. Certbot kết nối tới Let's Encrypt CA để xác thực quyền sở hữu tên miền qua HTTP-01 Challenge.
+2. Certbot tự động tải chứng chỉ SSL về thư mục `/etc/letsencrypt/live/api.yourdomain.com/`.
+3. Certbot **tự động sửa file cấu hình Nginx**, kích hoạt cổng 443 SSL và thêm luật chuyển hướng 301 từ HTTP sang HTTPS!
+4. Certbot tự động nạp lại (Reload) Nginx.
+
+#### Bước B.4: Kiểm tra tính năng tự động gia hạn (Auto-renewal)
+Chứng chỉ Let's Encrypt có hạn 90 ngày. Certbot đã tự động cài đặt Systemd timer để tự gia hạn khi còn dưới 30 ngày. Kiểm tra giả lập:
+```bash
+sudo certbot renew --dry-run
+```
 
 ---
 
