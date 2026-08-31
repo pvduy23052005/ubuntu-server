@@ -78,57 +78,56 @@ NestJS được viết bằng **TypeScript** (ngôn ngữ có kiểu dữ liệu
 
 ---
 
-## 🛠️ 3. Cài Đặt Node.js Chuẩn Production Trên Ubuntu Server
+## 🛠️ 3. Cài Đặt Node.js Trên Ubuntu Server Bằng NVM (Node Version Manager)
 
-Có 3 cách cài đặt Node.js trên Linux, nhưng trên **Production Server**, phương pháp chuẩn mực nhất là sử dụng **NodeSource Official Repository**.
+**NVM (Node Version Manager)** là công cụ quản lý phiên bản Node.js chuẩn mực và linh hoạt nhất hiện nay. NVM cho phép bạn dễ dàng cài đặt, chuyển đổi và quản lý nhiều phiên bản Node.js khác nhau trên cùng một máy chủ mà không bị lỗi quyền hạn `sudo/root`.
 
 ```text
 ┌───────────────────────────┬───────────────────┬─────────────────────────────┐
-│ Phương pháp               │ Ưu điểm           │ Nhược điểm / Đánh giá       │
+│ Phương pháp               │ Ưu điểm           │ Đánh giá                    │
 ├───────────────────────────┼───────────────────┼─────────────────────────────┤
-│ 1. `apt install nodejs`   │ Có sẵn trong OS   │ Phiên bản rất cũ (v12/v18)  │
-│ 2. NVM (Node Version Mgr) │ Đổi version nhanh │ Phụ thuộc biến môi trường   │
-│                           │                   │ của user, khó chạy Systemd  │
-│ 3. NodeSource (APT Repo)  │ Chuẩn hệ thống,   │ KHUYẾN NGHỊ CHO SERVER      │
-│                           │ bảo mật, cập nhật │ PRODUCTION                  │
+│ 1. NVM (Node Version Mgr) │ Đổi version linh  │ KHUYẾN NGHỊ: Cài đặt dễ     │
+│                           │ hoạt, không cần   │ dàng, quản lý phiên bản độc │
+│                           │ sudo khi npm -g   │ lập cho từng dự án          │
+│ 2. NodeSource (APT Repo)  │ Chuẩn hệ thống APT│ Thích hợp cho môi trường OS │
+│                           │ toàn cục          │ chỉ chạy 1 phiên bản cố định│
+│ 3. `apt install nodejs`   │ Có sẵn trong OS   │ Không nên dùng (bản rất cũ) │
 └───────────────────────────┴───────────────────┴─────────────────────────────┘
 ```
 
 ---
 
-### Các bước cài đặt Node.js LTS (v20 / v22) qua NodeSource
+### Các bước tải và cài đặt Node.js 24 qua NVM (Từng bước chi tiết)
 
-Đăng nhập vào Ubuntu Server VM và chạy chuỗi lệnh sau:
+Đăng nhập vào Ubuntu Server VM và thực hiện chuỗi lệnh sau:
 
 ```bash
-# Bước 1: Cài đặt các công cụ tải mạng cần thiết
-sudo apt update
-sudo apt install -y curl ca-certificates gnupg
+# Bước 1: Tải và cài đặt NVM (Phiên bản v0.40.7 mới nhất)
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.7/install.sh | bash
 
-# Bước 2: Tải và nạp kho lưu trữ NodeSource cho phiên bản Node.js 20.x LTS
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+# Bước 2: Nạp môi trường NVM vào shell hiện tại (không cần khởi động lại Terminal)
+\. "$HOME/.nvm/nvm.sh"
 
-# Bước 3: Cài đặt Node.js (tự động đi kèm npm)
-sudo apt install -y nodejs
+# Bước 3: Tải và cài đặt phiên bản Node.js 24
+nvm install 24
 
-# Bước 4: Kiểm tra phiên bản cài đặt thành công
-node -v
-npm -v
+# Bước 4: Thiết lập phiên bản 24 làm phiên bản mặc định của hệ thống
+nvm alias default 24
+nvm use 24
+
+# Bước 5: Kiểm tra xác nhận phiên bản Node.js và NPM
+node -v # In ra phiên bản Node.js (ví dụ: v24.x.x)
+npm -v  # In ra phiên bản NPM (ví dụ: 11.x.x)
 ```
 
-*Quan sát kết quả:*
-```text
-node: v20.x.x
-npm:  10.x.x
-```
+> [!TIP]
+> **Ưu điểm lớn khi dùng NVM:**  
+> Khi bạn cài đặt các package toàn cục (ví dụ: `npm install -g @nestjs/cli`, `npm install -g pnpm`), bạn **KHÔNG CẦN gõ `sudo`**, vì toàn bộ binary được lưu trong thư mục người dùng `~/.nvm/versions/node/` thay vì `/usr/local/bin/`.
 
-*(Tùy chọn) Cài đặt thêm các Package Manager hiện đại nếu dự án yêu cầu:*
 ```bash
-# Cài đặt PNPM toàn cục
-sudo npm install -g pnpm
-
-# Cài đặt Yarn toàn cục
-sudo npm install -g yarn
+# (Tùy chọn) Cài đặt thêm các Package Manager hiện đại
+npm install -g pnpm
+npm install -g yarn
 ```
 
 ---
