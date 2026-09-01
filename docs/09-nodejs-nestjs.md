@@ -1,8 +1,8 @@
-# 📘 Phần 09: Node.js & NestJS – Thiết Lập Môi Trường Thực Thi Backend Trên Ubuntu Server
+# 📘 Phần 09: Node.js & NestJS – Thiết Lập Môi Trường Thực Thi Backend Với PNPM Trên Ubuntu Server
 
 > **Motto cốt lõi:**  
-> *Hiểu vòng đời ứng dụng: TypeScript `src/` (Dev) $\rightarrow$ JavaScript `dist/` (Prod) | Production dùng `npm ci` và `node dist/main.js`, tuyệt đối không chạy `npm run start:dev` trên Server!*  
-> Chu trình chuẩn: **Khái niệm → Bản chất Runtime → Cài đặt chuẩn Production → Build & Triển khai → Xử lý sự cố → Hands-on Lab.**
+> *Hiểu vòng đời ứng dụng: TypeScript `src/` (Dev) $\rightarrow$ JavaScript `dist/` (Prod) | Quản lý Node 24 linh hoạt với NVM | Tối ưu hóa tốc độ & đĩa cứng với PNPM (`pnpm install --frozen-lockfile`), tuyệt đối không chạy `pnpm run start:dev` trên Production!*  
+> Chu trình chuẩn: **Bản chất Runtime → Cài đặt NVM & Node 24 & PNPM → Khởi tạo NestJS bằng PNPM → Build & Chạy Production → Xử lý sự cố → Lab Thực Chiến.**
 
 ---
 
@@ -10,12 +10,13 @@
 
 Sau khi hoàn thành phần này, bạn sẽ:
 1. **Hiểu bản chất Node.js Runtime trên Linux:** V8 Engine, Libuv, Event Loop và cơ chế Non-blocking I/O vận hành như thế nào trong môi trường máy chủ.
-2. **Lựa chọn đúng phương pháp cài đặt Node.js:** So sánh `apt` mặc định, **NodeSource Repository** (Chuẩn Production) và **NVM/FNM** (Môi trường Dev đa phiên bản).
-3. **Làm chủ quy trình đóng gói & triển khai NestJS:** Phân biệt rõ ranh giới giữa môi trường **Development** (`npm run start:dev`) và **Production** (`npm run build` $\rightarrow$ `node dist/main.js`).
-4. **Tối ưu hóa Dependencies:** Hiểu sự khác biệt sống còn giữa `npm install` và `npm ci --omit=dev`.
-5. **Quản lý biến môi trường an toàn:** Thiết lập file `.env` chuẩn trên server và nạp cấu hình bảo mật vào ứng dụng.
-6. **Nhận thức vấn đề Process Lifecycle:** Hiểu vì sao khi tắt kết nối SSH thì ứng dụng Node.js bị tắt theo, chuẩn bị nền tảng chuyển giao sang **[Phần 10: Systemd]**.
-7. **Xử lý 4 lỗi kinh điển:** `EADDRINUSE: 3000`, `Cannot find module`, Lỗi thiếu RAM khi build TypeScript (Out of Memory), và Lỗi quên nạp biến môi trường.
+2. **Làm chủ NVM (Node Version Manager):** Cài đặt NVM v0.40.7 và quản lý linh hoạt Node.js phiên bản 24 mới nhất.
+3. **Thành thạo PNPM (Performant NPM):** Hiểu cơ chế Content-addressable storage và Hard-links giúp PNPM cài đặt dependencies nhanh gấp 3 lần và tiết kiệm hàng GB dung lượng đĩa trên Server.
+4. **Làm chủ quy trình đóng gói & triển khai NestJS bằng PNPM:** Phân biệt rõ ranh giới giữa môi trường **Development** (`pnpm run start:dev`) và **Production** (`pnpm run build` $\rightarrow$ `node dist/main.js`).
+5. **Tối ưu hóa Dependencies:** Hiểu sự khác biệt sống còn giữa `pnpm install` và `pnpm install --frozen-lockfile` (tương đương `npm ci`).
+6. **Quản lý biến môi trường an toàn:** Thiết lập file `.env` chuẩn trên server và nạp cấu hình bảo mật vào ứng dụng.
+7. **Nhận thức vấn đề Process Lifecycle:** Hiểu vì sao khi tắt kết nối SSH thì ứng dụng Node.js bị tắt theo, chuẩn bị nền tảng chuyển giao sang **[Phần 10: Systemd]**.
+8. **Xử lý 4 lỗi kinh điển:** `EADDRINUSE: 3000`, `Cannot find module`, Lỗi thiếu RAM khi build TypeScript (Out of Memory), và Lỗi quên nạp biến môi trường.
 
 ---
 
@@ -55,7 +56,7 @@ NestJS được viết bằng **TypeScript** (ngôn ngữ có kiểu dữ liệu
 ├──────────────────────────────────┤            ├──────────────────────────────────┤
 │ - Mã nguồn: src/*.ts             │            │ - Mã nguồn: dist/*.js            │
 │ - Chạy qua: ts-node (JIT Compile)│            │ - Chạy qua: node dist/main.js    │
-│ - Lệnh: npm run start:dev        │            │ - Lệnh: node dist/main.js        │
+│ - Lệnh: pnpm run start:dev       │            │ - Lệnh: node dist/main.js        │
 │ - Dung lượng RAM: ~300MB - 600MB │            │ - Dung lượng RAM: ~60MB - 120MB  │
 │ - Mục đích: Hot-reload khi code  │            │ - Mục đích: Tối đa hóa tốc độ,   │
 │   (KHÔNG BAO GIỜ DÙNG TRÊN PROD) │            │   tiết kiệm RAM, ổn định 100%    │
@@ -69,7 +70,7 @@ NestJS được viết bằng **TypeScript** (ngôn ngữ có kiểu dữ liệu
       src/app.module.ts
       src/users/*.ts
                  │
-                 │ npm run build (TypeScript Compiler: tsc)
+                 │ pnpm run build (TypeScript Compiler: tsc)
                  ▼
       dist/main.js (JavaScript thuần tối ưu)
       dist/app.module.js
@@ -78,26 +79,15 @@ NestJS được viết bằng **TypeScript** (ngôn ngữ có kiểu dữ liệu
 
 ---
 
-## 🛠️ 3. Cài Đặt Node.js Trên Ubuntu Server Bằng NVM (Node Version Manager)
+## 🛠️ 3. Cài Đặt NVM, Node.js 24 & PNPM Trên Ubuntu Server
 
-**NVM (Node Version Manager)** là công cụ quản lý phiên bản Node.js chuẩn mực và linh hoạt nhất hiện nay. NVM cho phép bạn dễ dàng cài đặt, chuyển đổi và quản lý nhiều phiên bản Node.js khác nhau trên cùng một máy chủ mà không bị lỗi quyền hạn `sudo/root`.
-
-```text
-┌───────────────────────────┬───────────────────┬─────────────────────────────┐
-│ Phương pháp               │ Ưu điểm           │ Đánh giá                    │
-├───────────────────────────┼───────────────────┼─────────────────────────────┤
-│ 1. NVM (Node Version Mgr) │ Đổi version linh  │ KHUYẾN NGHỊ: Cài đặt dễ     │
-│                           │ hoạt, không cần   │ dàng, quản lý phiên bản độc │
-│                           │ sudo khi npm -g   │ lập cho từng dự án          │
-│ 2. NodeSource (APT Repo)  │ Chuẩn hệ thống APT│ Thích hợp cho môi trường OS │
-│                           │ toàn cục          │ chỉ chạy 1 phiên bản cố định│
-│ 3. `apt install nodejs`   │ Có sẵn trong OS   │ Không nên dùng (bản rất cũ) │
-└───────────────────────────┴───────────────────┴─────────────────────────────┘
-```
+### 3.1. Tại sao kết hợp NVM + PNPM là lựa chọn hàng đầu?
+* **NVM (Node Version Manager):** Quản lý phiên bản Node.js không cần quyền `sudo`, độc lập hoàn toàn với các package của OS.
+* **PNPM (Performant NPM):** Sử dụng cơ chế lưu trữ tập trung (Global Content-addressable Store) và liên kết cứng (Hard Links). Nếu bạn có 5 dự án dùng chung NestJS, PNPM chỉ lưu 1 bản duy nhất trên đĩa cứng thay vì nhân bản 5 lần như NPM!
 
 ---
 
-### Các bước tải và cài đặt Node.js 24 qua NVM (Từng bước chi tiết)
+### 3.2. Các bước cài đặt chi tiết
 
 Đăng nhập vào Ubuntu Server VM và thực hiện chuỗi lệnh sau:
 
@@ -111,43 +101,44 @@ curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.7/install.sh | bash
 # Bước 3: Tải và cài đặt phiên bản Node.js 24
 nvm install 24
 
-# Bước 4: Thiết lập phiên bản 24 làm phiên bản mặc định của hệ thống
+# Bước 4: Thiết lập Node.js 24 làm phiên bản mặc định
 nvm alias default 24
 nvm use 24
 
 # Bước 5: Kiểm tra xác nhận phiên bản Node.js và NPM
-node -v # In ra phiên bản Node.js (ví dụ: v24.x.x)
-npm -v  # In ra phiên bản NPM (ví dụ: 11.x.x)
-```
+node -v # In ra phiên bản: v24.x.x
+npm -v  # In ra phiên bản: 11.x.x
 
-> [!TIP]
-> **Ưu điểm lớn khi dùng NVM:**  
-> Khi bạn cài đặt các package toàn cục (ví dụ: `npm install -g @nestjs/cli`, `npm install -g pnpm`), bạn **KHÔNG CẦN gõ `sudo`**, vì toàn bộ binary được lưu trong thư mục người dùng `~/.nvm/versions/node/` thay vì `/usr/local/bin/`.
-
-```bash
-# (Tùy chọn) Cài đặt thêm các Package Manager hiện đại
+# Bước 6: Cài đặt PNPM toàn cục (Global)
 npm install -g pnpm
-npm install -g yarn
+
+# Bước 7: Kiểm tra phiên bản PNPM
+pnpm -v # In ra phiên bản PNPM (ví dụ: 9.x.x / 10.x.x)
 ```
 
 ---
 
-## 🚀 4. Khởi Tạo & Đóng Gói Ứng Dụng NestJS Mẫu
+## 🚀 4. Khởi Tạo Dự Án NestJS Mẫu Bằng PNPM
 
-Chúng ta sẽ tạo một ứng dụng NestJS hoàn chỉnh để thực hành triển khai thực tế trên server.
-
-### Bước 4.1: Cài đặt NestJS CLI và tạo dự án mới
+### Bước 4.1: Cài đặt NestJS CLI và khởi tạo dự án với PNPM
 
 ```bash
-# 1. Cài đặt NestJS CLI toàn cục
-sudo npm install -g @nestjs/cli
+# 1. Cài đặt NestJS CLI toàn cục (không cần sudo khi dùng NVM)
+npm install -g @nestjs/cli
 
 # 2. Đi vào thư mục apps của user ubuntu
 mkdir -p ~/apps && cd ~/apps
 
-# 3. Tạo một dự án NestJS mới mang tên "nestjs-api" (chọn package manager là npm)
-nest new nestjs-api --skip-git --package-manager npm
+# 3. Tạo dự án NestJS chỉ định rõ Package Manager là PNPM
+nest new nestjs-api --skip-git --package-manager pnpm
 ```
+
+*Sau khi tạo xong, kiểm tra cấu trúc thư mục:*
+```bash
+cd ~/apps/nestjs-api
+ls -la
+```
+*Bạn sẽ thấy file khóa độc quyền của PNPM:* **`pnpm-lock.yaml`**.
 
 ---
 
@@ -168,8 +159,9 @@ export class AppService {
   getSystemStatus() {
     return {
       status: 'online',
-      service: 'NestJS Production API',
+      service: 'NestJS Production API with PNPM',
       node_version: process.version,
+      package_manager: 'pnpm',
       platform: process.platform,
       arch: process.arch,
       server_uptime: Math.floor(process.uptime()) + ' seconds',
@@ -200,23 +192,23 @@ export class AppController {
 
   @Get('api/health')
   getHealth() {
-    return { status: 'healthy', database: 'connected' };
+    return { status: 'healthy', package_manager: 'pnpm', database: 'connected' };
   }
 }
 ```
 
 ---
 
-## 📦 5. Quy Trình Build & Chạy Production Chuẩn Mực
+## 📦 5. Quy Trình Build & Chạy Production Chuẩn Mực Với PNPM
 
 Đây là quy trình bắt buộc phải nắm vững khi deploy bất kỳ ứng dụng NestJS nào lên server:
 
 ```text
 Thư mục dự án (~/apps/nestjs-api)
    │
-   ├── 1. Cài đặt dependencies: npm ci
+   ├── 1. Cài đặt dependencies: pnpm install --frozen-lockfile
    │
-   ├── 2. Biên dịch mã nguồn: npm run build ──► Sinh ra thư mục dist/
+   ├── 2. Biên dịch mã nguồn: pnpm run build ──► Sinh ra thư mục dist/
    │
    ├── 3. Cấu hình biến môi trường: .env
    │
@@ -225,24 +217,24 @@ Thư mục dự án (~/apps/nestjs-api)
 
 ---
 
-### Bước 5.1: Cài đặt Dependencies với `npm ci`
+### Bước 5.1: Cài đặt Dependencies chuẩn Production với `pnpm install --frozen-lockfile`
 
 > [!IMPORTANT]
-> **Tại sao trên Server dùng `npm ci` thay vì `npm install`?**
-> * **`npm install`:** Có thể tự ý cập nhật các package lên bản mới hơn nếu file `package.json` dùng dấu `^` hoặc `~`, dễ gây lỗi không tương thích code.
-> * **`npm ci` (Clean Install):** Đọc chính xác 100% file `package-lock.json`, xóa sạch `node_modules` cũ và cài đặt đúng từng phiên bản một cách hoàn hảo, tốc độ nhanh hơn gấp 2 lần.
+> **Tại sao dùng `--frozen-lockfile` trên Server?**
+> * Tương đương với lệnh `npm ci` của npm.
+> * Ép PNPM chỉ đọc chính xác 100% các phiên bản trong `pnpm-lock.yaml`, từ chối tự ý cập nhật package và ngăn chặn lỗi không tương thích phiên bản.
 
 ```bash
 cd ~/apps/nestjs-api
-npm ci
+pnpm install --frozen-lockfile
 ```
 
 ---
 
-### Bước 5.2: Biên dịch ứng dụng sang JavaScript thuần (`npm run build`)
+### Bước 5.2: Biên dịch ứng dụng sang JavaScript thuần (`pnpm run build`)
 
 ```bash
-npm run build
+pnpm run build
 ```
 
 Kiểm tra thư mục `dist/` vừa được sinh ra:
@@ -264,7 +256,7 @@ Dán nội dung cấu hình sau:
 ```env
 NODE_ENV=production
 PORT=3000
-APP_NAME=NestJS-Production-Server
+APP_NAME=NestJS-PNPM-Server
 API_SECRET_KEY=MyUltraSecureSecretKey2026!
 ```
 
@@ -283,11 +275,11 @@ node dist/main.js
 
 *Quan sát terminal xuất hiện log của NestJS:*
 ```text
-[Nest] 15204  - 08/26/2026, 8:15:00 AM     LOG [NestFactory] Starting Nest application...
-[Nest] 15204  - 08/26/2026, 8:15:01 AM     LOG [InstanceLoader] AppModule dependencies initialized
-[Nest] 15204  - 08/26/2026, 8:15:01 AM     LOG [RoutesResolver] AppController {/}:
-[Nest] 15204  - 08/26/2026, 8:15:01 AM     LOG [RouterExplorer] Mapped {/, GET} route
-[Nest] 15204  - 08/26/2026, 8:15:01 AM     LOG [NestApplication] Nest application successfully started
+[Nest] 15204  - 09/01/2026, 3:40:00 PM     LOG [NestFactory] Starting Nest application...
+[Nest] 15204  - 09/01/2026, 3:40:01 PM     LOG [InstanceLoader] AppModule dependencies initialized
+[Nest] 15204  - 09/01/2026, 3:40:01 PM     LOG [RoutesResolver] AppController {/}:
+[Nest] 15204  - 09/01/2026, 3:40:01 PM     LOG [RouterExplorer] Mapped {/, GET} route
+[Nest] 15204  - 09/01/2026, 3:40:01 PM     LOG [NestApplication] Nest application successfully started
 ```
 
 Mở một tab Terminal khác trên máy Mac hoặc trên Server để gửi request kiểm tra:
@@ -299,13 +291,14 @@ curl http://127.0.0.1:3000/
 ```json
 {
   "status": "online",
-  "service": "NestJS Production API",
-  "node_version": "v20.x.x",
+  "service": "NestJS Production API with PNPM",
+  "node_version": "v24.20.0",
+  "package_manager": "pnpm",
   "platform": "linux",
   "arch": "arm64",
   "server_uptime": "15 seconds",
   "free_memory_mb": "1420 MB",
-  "timestamp": "2026-08-26T08:15:15.000Z"
+  "timestamp": "2026-09-01T15:40:15.000Z"
 }
 ```
 
@@ -430,61 +423,63 @@ Hãy thử làm một thí nghiệm:
 ---
 
 ### 🔴 Lỗi 2: `Error: Cannot find module '/home/ubuntu/apps/.../dist/main.js'`
-* **Nguyên nhân:** Bạn chưa chạy lệnh biên dịch `npm run build` hoặc đang đứng sai thư mục làm việc khi chạy `node`.
+* **Nguyên nhân:** Bạn chưa chạy lệnh biên dịch `pnpm run build` hoặc đang đứng sai thư mục làm việc khi chạy `node`.
 * **Cách xử lý:**
   ```bash
   cd ~/apps/nestjs-api
-  npm run build
+  pnpm run build
   ls -la dist/main.js
   ```
 
 ---
 
-### 🔴 Lỗi 3: `JavaScript heap out of memory` khi chạy `npm run build` trên VM ít RAM
+### 🔴 Lỗi 3: `JavaScript heap out of memory` khi chạy `pnpm run build` trên VM ít RAM
 * **Nguyên nhân:** Trình biên dịch TypeScript `tsc` ngốn rất nhiều RAM khi phân tích cây cú pháp (AST). Nếu máy ảo chỉ có 1GB hoặc 2GB RAM, tiến trình sẽ bị Linux OOM Killer tiêu diệt.
 * **Cách xử lý:** Tăng giới hạn bộ nhớ Heap cho Node.js khi build:
   ```bash
-  NODE_OPTIONS="--max-old-space-size=1536" npm run build
+  NODE_OPTIONS="--max-old-space-size=1536" pnpm run build
   ```
 
 ---
 
 ### 🔴 Lỗi 4: Không đọc được biến môi trường trong file `.env`
-* **Nguyên nhân:** Chưa cài đặt package nạp môi trường `@nestjs/config` (hoặc `dotenv`) trong NestJS.
+* **Nguyên nhân:** Chưa cài đặt package nạp môi trường `@nestjs/config` trong NestJS.
 * **Cách xử lý:**
   ```bash
-  npm install @nestjs/config
+  pnpm add @nestjs/config
   ```
   Thêm `ConfigModule.forRoot({ isGlobal: true })` vào mảng `imports` trong `src/app.module.ts`.
 
 ---
 
-## 🧪 9. Bài Thực Hành Lab (10 Bước Triển Khai NestJS)
+## 🧪 9. Bài Thực Hành Lab (10 Bước Triển Khai NestJS Với PNPM)
 
 *Hãy thực hiện toàn bộ quy trình thiết lập môi trường Backend trên Ubuntu Server VM:*
 
-1. Cài đặt Node.js 20 LTS từ NodeSource Repository.
-2. Kiểm tra phiên bản `node -v` và `npm -v`.
-3. Cài đặt `@nestjs/cli` toàn cục.
-4. Tạo dự án mới `~/apps/nestjs-api`.
-5. Tạo endpoint `/api/health` trả về JSON trạng thái hệ thống.
-6. Chạy `npm ci` và biên dịch dự án với `npm run build`.
-7. Tạo file `.env` chứa `PORT=3000` và phân quyền `chmod 600 .env`.
-8. Chạy thử nghiệm `node dist/main.js` và test nội bộ bằng `curl http://127.0.0.1:3000/api/health`.
-9. Cấu hình Nginx Reverse Proxy chuyển tiếp cổng 80 vào `http://127.0.0.1:3000`.
-10. Mở trình duyệt trên máy Mac, truy cập `http://<IP_VM>/api/health` và xác nhận kết quả thành công!
+1. Cài đặt NVM v0.40.7: `curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.7/install.sh | bash`.
+2. Nạp shell và cài đặt Node.js 24: `\. "$HOME/.nvm/nvm.sh" && nvm install 24`.
+3. Cài đặt PNPM toàn cục: `npm install -g pnpm && pnpm -v`.
+4. Cài đặt NestJS CLI và khởi tạo dự án: `npm install -g @nestjs/cli && nest new nestjs-api --skip-git --package-manager pnpm`.
+5. Tạo endpoint `/api/health` trả về JSON trạng thái hệ thống và package manager.
+6. Cài đặt dependencies đóng băng: `pnpm install --frozen-lockfile`.
+7. Biên dịch dự án sang JavaScript: `pnpm run build`.
+8. Tạo file `.env` chứa `PORT=3000` và phân quyền `chmod 600 .env`.
+9. Chạy thử nghiệm `node dist/main.js` và test nội bộ bằng `curl http://127.0.0.1:3000/api/health`.
+10. Cấu hình Nginx Reverse Proxy chuyển tiếp cổng 80 vào `http://127.0.0.1:3000` và kiểm tra qua trình duyệt máy Mac!
 
 ---
 
-## 📌 10. Bảng Tra Cứu Lệnh Node.js / NestJS Cốt Lõi
+## 📌 10. Bảng Tra Cứu Lệnh PNPM & Node.js Cốt Lõi
 
 | Lệnh | Ý nghĩa & Khi nào dùng |
 | :--- | :--- |
-| `node -v` / `npm -v` | Kiểm tra phiên bản Node.js và NPM |
-| `npm ci` | Cài đặt chính xác dependencies theo `package-lock.json` (Dùng trên Server) |
-| `npm ci --omit=dev` | Chỉ cài dependencies chạy production, bỏ qua devDependencies (Tiết kiệm đĩa) |
-| `npm run build` | Biên dịch TypeScript `src/` sang JavaScript `dist/` |
+| `nvm install 24` | Cài đặt phiên bản Node.js 24 qua NVM |
+| `nvm use 24` / `nvm alias default 24` | Sử dụng và đặt Node 24 làm mặc định |
+| `pnpm -v` | Kiểm tra phiên bản PNPM |
+| `pnpm install --frozen-lockfile` | Cài đặt chính xác 100% dependencies theo `pnpm-lock.yaml` (Dùng trên Server) |
+| `pnpm install --prod --frozen-lockfile` | Chỉ cài dependencies Production, bỏ qua devDependencies (Tiết kiệm đĩa tối đa) |
+| `pnpm run build` | Biên dịch TypeScript `src/` sang JavaScript `dist/` |
+| `pnpm add <package>` | Cài đặt thêm một thư viện mới vào dự án |
 | `node dist/main.js` | Lệnh khởi chạy ứng dụng Production chuẩn mực |
 | `sudo ss -tulpn \| grep :3000` | Kiểm tra tiến trình đang chiếm giữ cổng 3000 |
 | `pkill -f "node"` | Tắt nhanh toàn bộ các tiến trình Node đang chạy ngầm |
-| `NODE_OPTIONS="--max-old-space-size=..."` | Cấp thêm RAM tối đa cho Node.js khi build dự án lớn |
