@@ -89,10 +89,10 @@ Dán toàn bộ nội dung cấu hình chuẩn bảo mật cao sau:
 # 1. CẤU HÌNH MẶC ĐỊNH TOÀN CỤC (GLOBAL DEFAULTS)
 # ==============================================================================
 [DEFAULT]
-# Danh sách IP an toàn không bao giờ bị cấm (Localhost + IP mạng của bạn)
+# Danh sách IP an toàn không bao giờ bị cấm (Localhost + IP máy của bạn)
 ignoreip = 127.0.0.1/8 ::1 192.168.64.1
 
-# Thời gian cấm IP (1h = 1 giờ, 1d = 1 ngày, 1w = 1 tuần)
+# Thời gian cấm IP cơ bản lần đầu (1h = 1 giờ, 1d = 1 ngày, 1w = 1 tuần)
 bantime  = 1h
 
 # Khoảng thời gian theo dõi vi phạm (10 phút)
@@ -101,10 +101,22 @@ findtime = 10m
 # Số lần thử sai tối đa trong khoảng findtime trước khi bị cấm
 maxretry = 5
 
-# Cơ chế đọc log hiện đại trên Ubuntu (dùng systemd journal)
+# ==============================================================================
+# BAN LŨY TIẾN: TÁI PHẠM THÌ TĂNG THỜI GIAN PHẠT LÊN CẤP SỐ NHÂN
+# ==============================================================================
+# Kích hoạt tính năng phạt tăng dần theo lịch sử vi phạm của IP
+bantime.increment = true
+
+# Hệ số nhân thời gian phạt mỗi lần tái phạm
+bantime.factor = 2
+
+# Thời gian cấm tối đa có thể áp dụng (4w = 4 tuần / gần 1 tháng)
+bantime.maxtime = 4w
+
+# Cơ chế đọc log hiện đại trên Ubuntu (dùng systemd-journald)
 backend = systemd
 
-# Hành động thực thi: Sử dụng UFW để chặn IP
+# Hành động thực thi: Sử dụng UFW để chặn IP tại tầng Tường lửa
 banaction = ufw
 
 # ==============================================================================
@@ -138,9 +150,87 @@ filter   = nginx-http-auth
 logpath  = /var/log/nginx/error.log
 maxretry = 3
 bantime  = 12h
+
+# ==============================================================================
+# 5. BẢO VỆ NGINX: RATE LIMITING (FLOOD / SPAM REQUEST)
+# ==============================================================================
+[nginx-limit-req]
+enabled  = true
+port     = http,https
+filter   = nginx-limit-req
+logpath  = /var/log/nginx/error.log
+backend  = auto
+maxretry = 5
+findtime = 2m
+bantime  = 2h
 ```
 
 *Lưu file:* Bấm `Ctrl + O` $\rightarrow$ `Enter`, sau đó `Ctrl + X` để thoát.
+
+---
+
+### 💡 Giải Thích Chi Tiết: Các Tham Số Này Làm Gì?
+
+```text
+┌─────────────────────────────────────────────────────────────────────────┐
+│              CƠ CHẾ HOẠT ĐỘNG CỦA BAN LŨY TIẾN (INCREMENTAL BANNING)    │
+└────────────────────────────────────┬────────────────────────────────────┘
+                                     │
+    Kẻ tấn công vi phạm lần 1 ───────┴──► Bị cấm: 1 GIỜ (bantime cơ bản)
+                                     │
+    Hết 1 giờ ──► Được mở khóa       │
+                                     │
+    Quay lại tấn công tiếp (Lần 2) ──┴──► Bị cấm: 1h x 2 = 2 GIỜ
+                                     │
+    Quay lại tấn công tiếp (Lần 3) ──┴──► Bị cấm: 2h x 2 = 4 GIỜ
+                                     │
+    Quay lại tấn công tiếp (Lần 4) ──┴──► Bị cấm: 4h x 2 = 8 GIỜ
+                                     │
+                                    ... (Tăng cấp số nhân)
+                                     │
+    Chạm ngưỡng tối đa (Lần n) ──────┴──► Bị cấm kịch trần: 4 TUẦN (bantime.maxtime)
+```
+
+1. **`ignoreip = 127.0.0.1/8 ::1 192.168.64.1` (Danh sách trắng / Whitelist):**
+   - Định nghĩa các địa chỉ IP "miễn nhiễm" với mọi hình phạt. Dù bạn có lỡ tay gõ sai mật khẩu 100 lần từ máy Mac (`192.168.64.1`) hay từ các script nội bộ (`127.0.0.1`), Fail2ban cũng **không bao giờ chặn**. Điều này giúp bạn loại bỏ 100% rủi ro tự khóa mình ra khỏi máy chủ.
+
+2. **`bantime = 1h` (Thời gian cấm cơ sở):**
+   - Khoảng thời gian một IP bị nhốt ngoài cửa trong **lần vi phạm đầu tiên**. Ở đây đặt là 1 giờ (`1h`).
+
+3. **`findtime = 10m` & `maxretry = 5` (Cửa sổ phát hiện):**
+   - Fail2ban theo dõi trong khung thời gian **10 phút** (`findtime = 10m`). Nếu một IP có từ **5 lần** thử sai trở lên (`maxretry = 5`), hệ thống lập tức xác định đây là hành vi dò quét độc hại và thi hành án phạt.
+
+4. **Bộ 3 tham số Ban Lũy Tiến (`bantime.increment`, `bantime.factor`, `bantime.maxtime`):**
+   - **Vấn đề trong thực tế:** Các botnet chuyên nghiệp thường được lập trình để "ngủ đông". Sau khi bị cấm 1 tiếng và được thả ra, chúng lại tiếp tục chu kỳ dò mật khẩu mới. Nếu không có ban lũy tiến, server của bạn sẽ liên tục bị quấy rầy.
+   - **`bantime.increment = true`:** Kích hoạt tính năng lưu lại "tiền án tiền sự" của từng IP trong cơ sở dữ liệu SQLite của Fail2ban (`/var/lib/fail2ban/fail2ban.sqlite3`).
+   - **`bantime.factor = 2`:** Hệ số nhân thời gian phạt. Mỗi lần IP đó tái phạm sau khi vừa hết hạn cấm, thời gian phạt mới sẽ bằng **thời gian phạt lần trước nhân với 2** (1h $\rightarrow$ 2h $\rightarrow$ 4h $\rightarrow$ 8h $\rightarrow$ 16h...).
+   - **`bantime.maxtime = 4w` (Thời gian cấm tối đa):** Giới hạn trần hình phạt tối đa là **4 tuần (1 tháng)**. Việc đặt trần này rất quan trọng để tránh cấm vĩnh viễn một địa chỉ IP (phòng trường hợp IP đó là IP động của nhà mạng sau này được cấp phát cho một người dùng hợp lệ khác).
+
+5. **`backend = systemd`:**
+   - Chỉ định Fail2ban đọc log trực tiếp từ **`systemd-journald`** của Linux Kernel (chuẩn mặc định trên Ubuntu 22.04 và 24.04 LTS), đảm bảo tốc độ phân tích log theo thời gian thực mà không cần cài thêm `rsyslog`.
+
+6. **`banaction = ufw`:**
+   - Thay vì dùng các quy tắc `iptables` thô khó quản lý, Fail2ban sẽ tự động thực thi thông qua **UFW** (`sudo ufw insert 1 deny from <IP>`). Nhờ vậy bạn có thể dễ dàng kiểm tra danh sách chặn bằng lệnh `sudo ufw status`.
+
+7. **`[nginx-limit-req]` (Chống Spam / Flood Request ở tầng Tường lửa):**
+   - **Nguyên lý hoạt động:** Nginx có module giới hạn tốc độ truy cập (`limit_req_zone`). Khi một client spam quá nhiều request trong thời gian ngắn, Nginx sẽ ghi một dòng cảnh báo vào `/var/log/nginx/error.log`:
+     `[error] ... limiting requests, excess: ... by zone ..., client: <IP>`
+   - **Sức mạnh khi kết hợp với Fail2ban:** Nếu một IP cố tình spam và **chạm ngưỡng vi phạm 5 lần (`maxretry = 5`) trong vòng 2 phút (`findtime = 2m`)**, Fail2ban sẽ ra lệnh cho UFW **khóa chặt IP đó trong 2 giờ (`bantime = 2h`)**.
+   - **Lợi ích tối thượng:** Bình thường khi bị rate limit, Nginx vẫn phải tốn CPU để nhận kết nối và trả về mã lỗi HTTP `503` hoặc `429`. Nhưng khi kết hợp với Fail2ban, kẻ tấn công sẽ bị **chặn đứng ngay tại cổng mạng bởi Kernel/Tường lửa** $\rightarrow$ Tiết kiệm 100% tài nguyên CPU và băng thông cho máy chủ!
+
+> [!TIP]
+> **Cách kích hoạt Rate Limiting trong Nginx để Fail2ban bắt log:**  
+> Thêm vào file cấu hình Nginx (`/etc/nginx/nginx.conf` hoặc Server Block):
+> ```nginx
+> # 1. Khai báo vùng nhớ theo dõi IP (tối đa 10 request/giây)
+> limit_req_zone $binary_remote_addr zone=mylimit:10m rate=10r/s;
+> 
+> # 2. Áp dụng vào location API:
+> location / {
+>     limit_req zone=mylimit burst=20 nodelay;
+>     proxy_pass http://127.0.0.1:3000;
+> }
+> ```
 
 ---
 
