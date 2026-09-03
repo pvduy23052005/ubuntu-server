@@ -137,6 +137,7 @@ enabled  = true
 port     = http,https
 filter   = nginx-botsearch
 logpath  = /var/log/nginx/error.log
+backend  = auto
 maxretry = 2
 bantime  = 48h
 
@@ -148,6 +149,7 @@ enabled  = true
 port     = http,https
 filter   = nginx-http-auth
 logpath  = /var/log/nginx/error.log
+backend  = auto
 maxretry = 3
 bantime  = 12h
 
@@ -206,8 +208,12 @@ bantime  = 2h
    - **`bantime.factor = 2`:** Hệ số nhân thời gian phạt. Mỗi lần IP đó tái phạm sau khi vừa hết hạn cấm, thời gian phạt mới sẽ bằng **thời gian phạt lần trước nhân với 2** (1h $\rightarrow$ 2h $\rightarrow$ 4h $\rightarrow$ 8h $\rightarrow$ 16h...).
    - **`bantime.maxtime = 4w` (Thời gian cấm tối đa):** Giới hạn trần hình phạt tối đa là **4 tuần (1 tháng)**. Việc đặt trần này rất quan trọng để tránh cấm vĩnh viễn một địa chỉ IP (phòng trường hợp IP đó là IP động của nhà mạng sau này được cấp phát cho một người dùng hợp lệ khác).
 
-5. **`backend = systemd`:**
-   - Chỉ định Fail2ban đọc log trực tiếp từ **`systemd-journald`** của Linux Kernel (chuẩn mặc định trên Ubuntu 22.04 và 24.04 LTS), đảm bảo tốc độ phân tích log theo thời gian thực mà không cần cài thêm `rsyslog`.
+5. **`backend = systemd` vs `backend = auto` (Quy tắc sống còn khi đọc Log):**
+   - **Trong khối `[DEFAULT]`:** Ta đặt `backend = systemd` để Fail2ban đọc log trực tiếp từ **`systemd-journald`** của Linux Kernel (chuẩn mặc định trên Ubuntu 22.04 và 24.04 LTS). Dịch vụ SSH (`sshd`) ghi log vào journald nên hoạt động cực kỳ hoàn hảo.
+   - **Tại sao các Jail của Nginx PHẢI ghi đè `backend = auto`?**
+     - Nginx mặc định ghi nhật ký lỗi ra file vật lý trên đĩa cứng: `/var/log/nginx/error.log` (chứ không ném vào systemd-journald).
+     - Nếu không ghi đè `backend = auto` trong các jail của Nginx, Fail2ban sẽ kế thừa `backend = systemd` từ `[DEFAULT]`, dẫn đến việc **bỏ qua hoàn toàn file `/var/log/nginx/error.log`** và cố tìm log trong journald $\rightarrow$ Fail2ban sẽ bị "mù", không bao giờ bắt được bot dò quét web!
+     - Khai báo `backend = auto` ép Fail2ban sử dụng cơ chế lắng nghe file (`inotify`) để theo dõi trực tiếp file `/var/log/nginx/error.log` theo thời gian thực.
 
 6. **`banaction = ufw`:**
    - Thay vì dùng các quy tắc `iptables` thô khó quản lý, Fail2ban sẽ tự động thực thi thông qua **UFW** (`sudo ufw insert 1 deny from <IP>`). Nhờ vậy bạn có thể dễ dàng kiểm tra danh sách chặn bằng lệnh `sudo ufw status`.

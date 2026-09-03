@@ -130,14 +130,39 @@ ignoreip = 127.0.0.1/8 ::1
 bantime  = 1h
 findtime = 10m
 maxretry = 5
-banaction = ufw
+
+# Ban lũy tiến: Tái phạm tăng gấp đôi thời gian cấm
+bantime.increment = true
+bantime.factor = 2
+bantime.maxtime = 4w
+
 backend  = systemd
+banaction = ufw
 
 [sshd]
 enabled  = true
 port     = ssh
 maxretry = 3
 bantime  = 24h
+
+[nginx-botsearch]
+enabled  = true
+port     = http,https
+filter   = nginx-botsearch
+logpath  = /var/log/nginx/error.log
+backend  = auto
+maxretry = 2
+bantime  = 48h
+
+[nginx-limit-req]
+enabled  = true
+port     = http,https
+filter   = nginx-limit-req
+logpath  = /var/log/nginx/error.log
+backend  = auto
+maxretry = 5
+findtime = 2m
+bantime  = 2h
 EOF
 
 sudo systemctl enable --now fail2ban
