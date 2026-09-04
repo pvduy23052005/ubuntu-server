@@ -89,8 +89,8 @@ Dán toàn bộ nội dung cấu hình chuẩn bảo mật cao sau:
 # 1. CẤU HÌNH MẶC ĐỊNH TOÀN CỤC (GLOBAL DEFAULTS)
 # ==============================================================================
 [DEFAULT]
-# Danh sách IP an toàn không bao giờ bị cấm (Localhost + IP máy của bạn)
-ignoreip = 127.0.0.1/8 ::1 192.168.64.1
+# Danh sách IP an toàn không bao giờ bị cấm (Localhost + IP máy Mac / subnet mạng ảo)
+ignoreip = 127.0.0.1/8 ::1 192.168.252.1 192.168.252.0/24
 
 # Thời gian cấm IP cơ bản lần đầu (1h = 1 giờ, 1d = 1 ngày, 1w = 1 tuần)
 bantime  = 1h
@@ -193,8 +193,8 @@ bantime  = 2h
     Chạm ngưỡng tối đa (Lần n) ──────┴──► Bị cấm kịch trần: 4 TUẦN (bantime.maxtime)
 ```
 
-1. **`ignoreip = 127.0.0.1/8 ::1 192.168.64.1` (Danh sách trắng / Whitelist):**
-   - Định nghĩa các địa chỉ IP "miễn nhiễm" với mọi hình phạt. Dù bạn có lỡ tay gõ sai mật khẩu 100 lần từ máy Mac (`192.168.64.1`) hay từ các script nội bộ (`127.0.0.1`), Fail2ban cũng **không bao giờ chặn**. Điều này giúp bạn loại bỏ 100% rủi ro tự khóa mình ra khỏi máy chủ.
+1. **`ignoreip = 127.0.0.1/8 ::1 192.168.252.1 192.168.252.0/24` (Danh sách trắng / Whitelist):**
+   - Định nghĩa các địa chỉ IP "miễn nhiễm" với mọi hình phạt. Dù bạn có lỡ tay gõ sai mật khẩu 100 lần từ máy Mac (`192.168.252.1` hoặc toàn bộ dải mạng `192.168.252.0/24`) hay từ các script nội bộ (`127.0.0.1`), Fail2ban cũng **không bao giờ chặn**. Điều này giúp bạn loại bỏ 100% rủi ro tự khóa mình ra khỏi máy chủ.
 
 2. **`bantime = 1h` (Thời gian cấm cơ sở):**
    - Khoảng thời gian một IP bị nhốt ngoài cửa trong **lần vi phạm đầu tiên**. Ở đây đặt là 1 giờ (`1h`).
@@ -317,25 +317,25 @@ Hãy thực hiện một bài test thực tế ngay trên máy Mac:
 ### Thí nghiệm: Giả lập tấn công dò quét file nhạy cảm trên Nginx
 
 1. Đảm bảo Nginx và Fail2ban đang chạy trên VM.
-2. Từ Terminal của **máy Mac**, dùng `curl` gửi 3 request liên tiếp tìm kiếm các file cấm:
+2. Từ Terminal của **máy Mac**, dùng `curl` gửi 3 request liên tiếp tìm kiếm các file cấm vào IP máy ảo (`192.168.252.3`):
    ```bash
-   curl http://192.168.64.2/.env
-   curl http://192.168.64.2/wp-login.php
-   curl http://192.168.64.2/phpmyadmin
+   curl http://192.168.252.3/.env
+   curl http://192.168.252.3/wp-login.php
+   curl http://192.168.252.3/phpmyadmin
    ```
 3. Quay trở lại **Ubuntu Server VM** và kiểm tra trạng thái jail `nginx-botsearch`:
    ```bash
    sudo fail2ban-client status nginx-botsearch
    ```
-   $\rightarrow$ Bạn sẽ thấy IP của máy Mac (`192.168.64.1`) đã xuất hiện trong **`Banned IP list`**!
+   $\rightarrow$ Bạn sẽ thấy IP của máy Mac (`192.168.252.1`) đã xuất hiện trong **`Banned IP list`**! *(Lưu ý: Để test thực tế bước này, hãy tạm thời xóa IP máy Mac khỏi dòng `ignoreip` trong `jail.local` rồi reload Fail2ban)*.
 4. Từ máy Mac, thử gửi lại bất kỳ request nào:
    ```bash
-   curl http://192.168.64.2/
+   curl http://192.168.252.3/
    ```
    $\rightarrow$ Lệnh bị treo hoặc trả về `Connection refused` vì Tường lửa UFW đã chặn triệt để gói tin từ máy Mac!
 5. Trên Server, mở khóa cho máy Mac:
    ```bash
-   sudo fail2ban-client set nginx-botsearch unbanip 192.168.64.1
+   sudo fail2ban-client set nginx-botsearch unbanip 192.168.252.1
    ```
    $\rightarrow$ Kết nối của máy Mac lập tức được khôi phục bình thường.
 
@@ -372,7 +372,7 @@ sudo fail2ban-regex /var/log/auth.log /etc/fail2ban/filter.d/sshd.conf
 *Hãy thực hiện toàn bộ kịch bản thiết lập hệ thống phòng thủ tự động Fail2ban trên Ubuntu Server VM:*
 
 1. Cài đặt Fail2ban qua APT: `sudo apt install -y fail2ban`.
-2. Xác định IP của máy Mac (`192.168.64.1`) và `127.0.0.1`.
+2. Xác định IP của máy Mac (`192.168.252.1`), IP máy ảo (`192.168.252.3`) và `127.0.0.1`.
 3. Tạo file `/etc/fail2ban/jail.local` với cấu hình `ignoreip`, `banaction = ufw`, `backend = systemd`.
 4. Kích hoạt jail `[sshd]` và `[nginx-botsearch]`.
 5. Khởi động lại dịch vụ: `sudo systemctl restart fail2ban`.
