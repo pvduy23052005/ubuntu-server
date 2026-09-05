@@ -13,9 +13,9 @@ Sau khi hoàn thành phần này, bạn sẽ:
 2. **Phân biệt các loại sao lưu:** Full Backup (Toàn phần), Incremental Backup (Gia tăng) và Differential Backup (Vi sai).
 3. **Xác định các thành phần bắt buộc phải Backup:** Cơ sở dữ liệu (PostgreSQL/MySQL), Mã nguồn & Tệp tải lên (Uploads/Volumes), và File cấu hình hệ thống (`/etc/`).
 4. **Làm chủ các công cụ lưu trữ & đồng bộ:** `tar`, `gzip`, `rsync` (đồng bộ qua SSH) và `rclone` (đồng bộ lên Cloud S3/Google Drive).
-5. **Viết Bash Script tự động hóa chuẩn Production:** Tự động xuất CSDL, nén tệp, đặt tên theo ngày giờ, dọn dẹp các bản backup cũ quá 7 ngày và ghi log.
+5. **Viết Bash Script tự động hóa chuẩn Production:** Tự động xuất CSDL (kể cả CSDL chạy trong Docker), nén tệp lọc rác, hỗ trợ máy chủ đa ứng dụng (Multi-App), dọn dẹp bản backup cũ và ghi log.
 6. **Lập lịch chạy ngầm với Crontab:** Hiểu cú pháp 5 dấu sao (`* * * * *`) và thiết lập lịch backup tự động vào 02:00 sáng mỗi ngày.
-7. **Thực hành Diễn tập Khôi phục (Disaster Recovery Drill):** Tự tay phục hồi hệ thống từ file backup khi xảy ra sự cố mất dữ liệu.
+7. **Thực hành Diễn tập Khôi phục & Kiểm chứng (DR Drill & Verification):** Tự tay phục hồi hệ thống từ file backup và nắm vững checklist kiểm tra tính toàn vẹn.
 
 ---
 
@@ -94,6 +94,76 @@ rsync -avz --delete -e ssh ubuntu@192.168.64.2:/var/www/ /Users/macbook/ServerBa
 
 ---
 
+### 🐳 3.3. Sao Lưu Cơ Sở Dữ Liệu Chạy Bằng Docker (Dockerized Database Backup)
+
+Khi cơ sở dữ liệu (PostgreSQL, MySQL, MongoDB) được triển khai bên trong **Docker Container**, quy trình sao lưu có những điểm khác biệt cốt lõi so với cài trực tiếp trên máy chủ:
+
+#### 1. Bảng so sánh kỹ thuật: Host trực tiếp vs Docker Container
+
+| Tiêu chí | Chạy trực tiếp trên Host (Systemd) | Chạy bên trong Docker Container |
+| :--- | :--- | :--- |
+| **Công cụ Client (`pg_dump`, `mysqldump`)** | **Bắt buộc cài trên host** (`postgresql-client`, `mysql-client`). | **Không cần cài gì trên host**, mượn trực tiếp tool có sẵn trong container qua `docker exec`. |
+| **Cách xác thực (Password)** | Cần cấu hình file `~/.pgpass`, `~/.my.cnf` hoặc `sudo -u postgres`. | Truyền qua biến môi trường `-e` hoặc flag của `docker exec`. |
+| **Vị trí lưu dữ liệu gốc (Data)** | Nằm tại `/var/lib/postgresql/` hoặc `/var/lib/mysql/`. | Nằm trong **Docker Named Volume** (`/var/lib/docker/volumes/...`) hoặc thư mục Bind Mount. |
+| **Điều kiện thực thi** | Dịch vụ systemd đang active. | Container **bắt buộc phải đang ở trạng thái `running`**. |
+
+#### 2. ⚠️ Cạm bẫy chết người: Tuyệt đối KHÔNG dùng cờ `-t` trong Script và Crontab!
+
+Khi thao tác bằng tay ngoài Terminal tương tác, ta quen gõ `docker exec -it ...`. Tuy nhiên:
+> [!CAUTION]
+> **Tại sao phải dùng `-i` và KHÔNG ĐƯỢC dùng `-t` khi backup tự động?**
+> 1. **Lỗi Cron / Non-interactive:** Cron chạy không có màn hình terminal TTY, lệnh có `-t` sẽ báo lỗi: `the input device is not a TTY`.
+> 2. **Hỏng cấu trúc nhị phân (Binary Corruption):** Cờ `-t` tự động chèn thêm ký tự xuống dòng carriage return (`\r\n` kiểu Windows). Nếu dump dạng nhị phân (`pg_dump -Fc`), cờ `-t` sẽ **làm hỏng cấu trúc file**, khiến file backup hoàn toàn vô dụng khi restore!
+>
+> 👉 **Quy tắc vàng:** Trong Script & Crontab, **chỉ dùng `-i` (interactive STDIN)** hoặc không dùng cờ nào:
+> ```bash
+> # ✅ ĐÚNG:
+> docker exec -i postgres_container pg_dump -U postgres dbname > backup.sql
+> 
+> # ❌ SAI (gây hỏng file khi chạy nền):
+> docker exec -t postgres_container pg_dump -U postgres dbname > backup.sql
+> ```
+
+#### 3. Cú pháp Backup & Restore chuẩn cho các Database phổ biến trong Docker
+
+```bash
+# --- 🐘 POSTGRESQL ---
+# Backup:
+docker exec -i -e PGPASSWORD="db_password" postgres_container pg_dump -U devuser -d nestjs_db > backup_postgres.sql
+# Restore:
+cat backup_postgres.sql | docker exec -i -e PGPASSWORD="db_password" postgres_container psql -U devuser -d nestjs_db
+
+# --- 🐬 MYSQL / MARIADB ---
+# Backup:
+docker exec -i mysql_container mysqldump -u root -p"root_password" wp_database > backup_mysql.sql
+# Restore:
+cat backup_mysql.sql | docker exec -i mysql_container mysql -u root -p"root_password" wp_database
+
+# --- 🍃 MONGODB ---
+# Backup (Archive stream):
+docker exec -i mongo_container mongodump --username root --password "root_password" --authenticationDatabase admin --db my_db --archive > backup_mongo.archive
+# Restore:
+cat backup_mongo.archive | docker exec -i mongo_container mongorestore --username root --password "root_password" --authenticationDatabase admin --archive
+```
+
+#### 4. Kỹ thuật Backup trực tiếp Docker Volume (Physical Backup cho Database lớn)
+Khi Database lên tới hàng trăm GB, việc dump qua SQL rất chậm. Ta có thể sao lưu trực tiếp Named Volume:
+```bash
+# 1. Tạm dừng container để đóng băng dữ liệu trong RAM:
+docker pause postgres_container
+
+# 2. Mượn một container Alpine tạm thời để nén dữ liệu volume ra thư mục backup:
+docker run --rm \
+    -v postgres_data:/data:ro \
+    -v /var/backups:/backup \
+    alpine tar -czf /backup/postgres_volume_$(date +%F).tar.gz -C /data .
+
+# 3. Mở lại container hoạt động bình thường:
+docker unpause postgres_container
+```
+
+---
+
 ## 📜 4. Xây Dựng Script Sao Lưu Tự Động Chuẩn Production
 
 Chúng ta sẽ viết một kịch bản Bash Script toàn diện: Tự động dump database, nén thư mục, xoay vòng xóa file cũ và ghi log.
@@ -146,9 +216,9 @@ mkdir -p "$CURRENT_BACKUP"
 
 # 2. BƯỚC 1: SAO LƯU CƠ SỞ DỮ LIỆU POSTGRESQL
 log "📦 Đang sao lưu Database: $DB_NAME..."
-# (Dùng lệnh Docker exec nếu chạy qua Docker, hoặc pg_dump trực tiếp)
-if command -v docker &> /dev/null && docker ps | grep -q production_postgres; then
-    docker exec -t production_postgres pg_dump -U $DB_USER $DB_NAME > "$CURRENT_BACKUP/database_$DB_NAME.sql"
+# (Dùng lệnh Docker exec -i nếu chạy qua Docker, hoặc pg_dump trực tiếp)
+if command -v docker &> /dev/null && [ $(docker ps -q -f name="^production_postgres$" -f status=running | wc -l) -gt 0 ]; then
+    docker exec -i production_postgres pg_dump -U $DB_USER $DB_NAME > "$CURRENT_BACKUP/database_$DB_NAME.sql"
 else
     pg_dump -U $DB_USER -h 127.0.0.1 $DB_NAME > "$CURRENT_BACKUP/database_$DB_NAME.sql" 2>/dev/null || true
 fi
@@ -282,15 +352,15 @@ dump_database() {
 
     case "$db_type" in
         postgres)
-            if [ -n "$container" ] && docker ps -q -f name="^${container}$" &>/dev/null; then
-                docker exec -t "$container" pg_dump -U "$db_user" "$db_name" > "$output_file"
+            if [ -n "$container" ] && [ $(docker ps -q -f name="^${container}$" -f status=running 2>/dev/null | wc -l) -gt 0 ]; then
+                docker exec -i "$container" pg_dump -U "$db_user" "$db_name" > "$output_file"
             else
                 pg_dump -U "$db_user" -h 127.0.0.1 "$db_name" > "$output_file"
             fi
             ;;
         mysql)
-            if [ -n "$container" ] && docker ps -q -f name="^${container}$" &>/dev/null; then
-                docker exec -t "$container" mysqldump -u "$db_user" "$db_name" > "$output_file"
+            if [ -n "$container" ] && [ $(docker ps -q -f name="^${container}$" -f status=running 2>/dev/null | wc -l) -gt 0 ]; then
+                docker exec -i "$container" mysqldump -u "$db_user" "$db_name" > "$output_file"
             else
                 mysqldump -u "$db_user" "$db_name" > "$output_file"
             fi
@@ -303,6 +373,13 @@ dump_database() {
             return 1
             ;;
     esac
+
+    # Kiểm tra tính toàn vẹn: File SQL không được rỗng (0 bytes)
+    if [ ! -s "$output_file" ]; then
+        log "ERROR" "  ❌ File dump CSDL '$output_file' bị rỗng (0 bytes)!"
+        rm -f "$output_file"
+        return 1
+    fi
 }
 
 # 5. TIẾN TRÌNH XỬ LÝ TỪNG ỨNG DỤNG (CÔ LẬP LỖI - FAULT ISOLATION)
@@ -495,12 +572,19 @@ Hãy cùng giả lập tình huống nguy cấp: **Database bị xóa nhầm ho�
    ```
 3. **Nạp lại dữ liệu vào Database:**
    ```bash
-   # Tìm file .sql bên trong thư mục vừa giải nén
+   # Cách A: Nếu Database cài trực tiếp trên Ubuntu Server:
    cat /tmp/recovery/backup_*/database_nestjs_db.sql | sudo -u postgres psql -d nestjs_db
+
+   # Cách B: Nếu Database chạy bên trong Docker Container (dùng cờ -i):
+   cat /tmp/recovery/backup_*/database_nestjs_db.sql | docker exec -i production_postgres psql -U devuser -d nestjs_db
    ```
 4. **Xác nhận khôi phục thành công:**
    ```bash
+   # Nếu trực tiếp trên host:
    sudo -u postgres psql -d nestjs_db -c "\dt"
+
+   # Nếu chạy trong Docker:
+   docker exec -i production_postgres psql -U devuser -d nestjs_db -c "\dt"
    ```
    $\rightarrow$ Toàn bộ các bảng dữ liệu đã quay trở lại nguyên vẹn!
 
