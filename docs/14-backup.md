@@ -201,6 +201,214 @@ cat /var/log/server_backup.log
 
 ---
 
+### 🚀 4.4. Nâng Cấp Production: Kịch Bản Sao Lưu Đa Ứng Dụng (Multi-App Backup)
+
+Khi máy chủ Ubuntu vận hành **nhiều ứng dụng đồng thời** (ví dụ: vừa có API NestJS, vừa có Dashboard React, vừa có WordPress/Python Service), mô hình sao lưu gộp 1 file duy nhất bộc lộ nhiều nhược điểm:
+1. **Khó phục hồi cục bộ:** Một app hỏng buộc phải giải nén toàn bộ kho lưu trữ khổng lồ của cả server.
+2. **Đa dạng công nghệ CSDL:** Mỗi app có thể dùng hệ quản trị khác nhau (PostgreSQL, MySQL/MariaDB, hoặc không dùng database).
+3. **Phình to dung lượng ổ cứng:** Nếu không lọc bỏ các thư mục tạm như `node_modules`, `.git`, `.next`, `dist`, dung lượng backup sẽ tăng từ vài chục MB lên hàng chục GB không cần thiết.
+
+#### Cấu trúc lưu trữ độc lập theo từng ứng dụng (Per-App Isolation)
+
+```text
+/var/backups/multi_apps/
+├── apps/
+│   ├── nestjs_api/           ──► [2026-09-05_020000_nestjs_api.tar.gz] (Code + DB Dump)
+│   ├── react_admin/          ──► [2026-09-05_020000_react_admin.tar.gz] (Source/Build + Config)
+│   └── wordpress_blog/       ──► [2026-09-05_020000_wordpress_blog.tar.gz] (Uploads + MySQL Dump)
+└── system_shared/
+    └── [2026-09-05_020000_system_configs.tar.gz] (Nginx, Let's Encrypt SSL, Systemd Services)
+```
+
+#### File Script: `/opt/scripts/backup-multi-apps.sh`
+
+```bash
+sudo nano /opt/scripts/backup-multi-apps.sh
+```
+
+Dán toàn bộ nội dung script chuẩn dưới đây:
+
+```bash
+#!/usr/bin/env bash
+# ==============================================================================
+# SCRIPT SAO LƯU ĐA ỨNG DỤNG (MULTI-APP PRODUCTION BACKUP)
+# Tự động xuất CSDL, nén mã nguồn lọc rác, phân tách từng app & sao lưu cấu hình hệ thống
+# ==============================================================================
+
+set -u  # Dừng và cảnh báo nếu sử dụng biến chưa được định nghĩa
+
+# 1. THIẾT LẬP MÔI TRƯỜNG & ĐƯỜNG DẪN HỆ THỐNG
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+DATE=$(date +%Y-%m-%d_%H%M%S)
+BACKUP_ROOT="/var/backups/multi_apps"
+APPS_BACKUP_DIR="$BACKUP_ROOT/apps"
+SYSTEM_BACKUP_DIR="$BACKUP_ROOT/system_shared"
+TEMP_DIR="/tmp/backup_runner_$DATE"
+LOG_FILE="/var/log/multi_app_backup.log"
+RETENTION_DAYS=7
+
+# 2. KHAI BÁO DANH SÁCH ỨNG DỤNG CẦN SAO LƯU
+# Cú pháp định dạng: "TÊN_APP|ĐƯỜNG_DẪN_SOURCE|LOẠI_DB|TÊN_DB|DB_USER|TÊN_CONTAINER_DOCKER"
+# - LOẠI_DB: postgres | mysql | none
+# - TÊN_CONTAINER_DOCKER: Để trống nếu chạy trực tiếp trên máy chủ; Điền tên container nếu chạy Docker
+APPS=(
+    "nestjs_api|/var/www/nestjs-api|postgres|nest_prod_db|postgres|postgres_db"
+    "react_admin|/var/www/react-admin|none|||"
+    "wordpress_blog|/var/www/wordpress|mysql|wp_database|root|mysql_db"
+)
+
+# 3. HÀM GHI NHẬT KÝ & KHỞI TẠO THƯ MỤC
+mkdir -p "$APPS_BACKUP_DIR" "$SYSTEM_BACKUP_DIR" "$TEMP_DIR"
+
+log() {
+    local level="$1"
+    local message="$2"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $message" | tee -a "$LOG_FILE"
+}
+
+log "INFO" "==============================================================="
+log "INFO" "🚀 BẮT ĐẦU CHU TRÌNH SAO LƯU ĐA ỨNG DỤNG: $DATE"
+
+SUCCESS_COUNT=0
+FAIL_COUNT=0
+
+# 4. HÀM DUMP DATABASE ĐA NĂNG (POSTGRESQL / MYSQL / DOCKER / DIRECT)
+dump_database() {
+    local db_type="$1"
+    local db_name="$2"
+    local db_user="$3"
+    local container="$4"
+    local output_file="$5"
+
+    case "$db_type" in
+        postgres)
+            if [ -n "$container" ] && docker ps -q -f name="^${container}$" &>/dev/null; then
+                docker exec -t "$container" pg_dump -U "$db_user" "$db_name" > "$output_file"
+            else
+                pg_dump -U "$db_user" -h 127.0.0.1 "$db_name" > "$output_file"
+            fi
+            ;;
+        mysql)
+            if [ -n "$container" ] && docker ps -q -f name="^${container}$" &>/dev/null; then
+                docker exec -t "$container" mysqldump -u "$db_user" "$db_name" > "$output_file"
+            else
+                mysqldump -u "$db_user" "$db_name" > "$output_file"
+            fi
+            ;;
+        none)
+            return 0
+            ;;
+        *)
+            log "WARN" "Loại CSDL '$db_type' không hỗ trợ. Bỏ qua backup DB."
+            return 1
+            ;;
+    esac
+}
+
+# 5. TIẾN TRÌNH XỬ LÝ TỪNG ỨNG DỤNG (CÔ LẬP LỖI - FAULT ISOLATION)
+for app_entry in "${APPS[@]}"; do
+    IFS='|' read -r APP_NAME APP_PATH DB_TYPE DB_NAME DB_USER DOCKER_CONTAINER <<< "$app_entry"
+
+    log "INFO" "---------------------------------------------------------------"
+    log "INFO" "📦 [App: $APP_NAME] Bắt đầu xử lý..."
+
+    APP_TEMP="$TEMP_DIR/$APP_NAME"
+    APP_TARGET_DIR="$APPS_BACKUP_DIR/$APP_NAME"
+    mkdir -p "$APP_TEMP" "$APP_TARGET_DIR"
+
+    # Bước 5.1: Sao lưu Cơ sở dữ liệu tương ứng
+    if [ "$DB_TYPE" != "none" ]; then
+        log "INFO" "  - Exporting Database ($DB_TYPE: $DB_NAME)..."
+        DB_OUT="$APP_TEMP/database_${DB_NAME}.sql"
+        if ! dump_database "$DB_TYPE" "$DB_NAME" "$DB_USER" "$DOCKER_CONTAINER" "$DB_OUT" 2>/dev/null; then
+            log "ERROR" "  ❌ Lỗi khi export database $DB_NAME của app $APP_NAME!"
+        fi
+    fi
+
+    # Bước 5.2: Đóng gói Source Code & Media (Loại bỏ triệt để thư mục rác)
+    if [ -d "$APP_PATH" ]; then
+        log "INFO" "  - Đóng gói mã nguồn từ: $APP_PATH (đã loại trừ node_modules, cache)"
+        tar -czf "$APP_TEMP/source_code.tar.gz" \
+            --exclude="node_modules" \
+            --exclude=".git" \
+            --exclude=".next" \
+            --exclude="dist" \
+            --exclude="build" \
+            --exclude="cache" \
+            --exclude="*.log" \
+            -C "$APP_PATH" . 2>/dev/null || true
+    else
+        log "WARN" "  ⚠️ Thư mục mã nguồn $APP_PATH không tồn tại!"
+    fi
+
+    # Bước 5.3: Nén gói hoàn chỉnh của riêng ứng dụng này
+    APP_FINAL_ARCHIVE="$APP_TARGET_DIR/${DATE}_${APP_NAME}.tar.gz"
+    if tar -czf "$APP_FINAL_ARCHIVE" -C "$TEMP_DIR" "$APP_NAME"; then
+        ARCHIVE_SIZE=$(du -sh "$APP_FINAL_ARCHIVE" | awk '{print $1}')
+        log "INFO" "  ✅ [App: $APP_NAME] Thành công: $(basename "$APP_FINAL_ARCHIVE") ($ARCHIVE_SIZE)"
+        ((SUCCESS_COUNT++))
+    else
+        log "ERROR" "  ❌ Thất bại khi nén gói backup của app $APP_NAME!"
+        ((FAIL_COUNT++))
+    fi
+
+    # Bước 5.4: Dọn dẹp bản backup cũ của riêng app này (Retention Policy)
+    find "$APP_TARGET_DIR" -type f -name "*_${APP_NAME}.tar.gz" -mtime +$RETENTION_DAYS -exec rm -f {} \;
+done
+
+# 6. SAO LƯU TOÀN BỘ CẤU HÌNH DÙNG CHUNG HỆ THỐNG
+log "INFO" "---------------------------------------------------------------"
+log "INFO" "⚙️ Đang sao lưu cấu hình dùng chung (Nginx, Let's Encrypt SSL, Systemd)..."
+
+SYS_TEMP="$TEMP_DIR/system_shared"
+mkdir -p "$SYS_TEMP"
+
+# Nginx vhosts & configs
+[ -d "/etc/nginx" ] && tar -czf "$SYS_TEMP/nginx.tar.gz" -C /etc/nginx . 2>/dev/null || true
+# Chứng chỉ SSL Let's Encrypt
+[ -d "/etc/letsencrypt" ] && tar -czf "$SYS_TEMP/letsencrypt.tar.gz" -C /etc/letsencrypt . 2>/dev/null || true
+# Cấu hình dịch vụ Systemd của các app
+tar -czf "$SYS_TEMP/systemd_units.tar.gz" /etc/systemd/system/*.service 2>/dev/null || true
+
+SYS_FINAL_ARCHIVE="$SYSTEM_BACKUP_DIR/${DATE}_system_configs.tar.gz"
+tar -czf "$SYS_FINAL_ARCHIVE" -C "$TEMP_DIR" "system_shared" 2>/dev/null || true
+find "$SYSTEM_BACKUP_DIR" -type f -name "*_system_configs.tar.gz" -mtime +$RETENTION_DAYS -exec rm -f {} \;
+
+# 7. DỌN DẸP BỘ NHỚ TẠM & TỔNG KẾT
+rm -rf "$TEMP_DIR"
+
+TOTAL_USAGE=$(du -sh "$BACKUP_ROOT" | awk '{print $1}')
+log "INFO" "==============================================================="
+log "INFO" "🏁 HOÀN TẤT SAO LƯU! Thành công: $SUCCESS_COUNT app | Thất bại: $FAIL_COUNT app"
+log "INFO" "📊 Tổng dung lượng kho sao lưu: $TOTAL_USAGE"
+log "INFO" "==============================================================="
+```
+
+#### Cấp quyền và chạy thử nghiệm:
+```bash
+sudo chmod +x /opt/scripts/backup-multi-apps.sh
+sudo /opt/scripts/backup-multi-apps.sh
+```
+
+#### Quy trình phục hồi (Restore) độc lập 1 App khi gặp sự cố:
+Khi một app (ví dụ `nestjs_api`) gặp trục trặc dữ liệu, bạn chỉ cần khôi phục đúng app đó mà không làm ảnh hưởng các dịch vụ khác:
+```bash
+# 1. Tạo thư mục tạm giải nén gói backup mới nhất của app
+mkdir -p /tmp/restore_nest
+tar -xzvf /var/backups/multi_apps/apps/nestjs_api/2026-*_nestjs_api.tar.gz -C /tmp/restore_nest/
+
+# 2. Khôi phục mã nguồn và dữ liệu
+tar -xzvf /tmp/restore_nest/nestjs_api/source_code.tar.gz -C /var/www/nestjs-api/
+
+# 3. Khôi phục Database
+cat /tmp/restore_nest/nestjs_api/database_nest_prod_db.sql | sudo -u postgres psql -d nest_prod_db
+
+# 4. Khởi động lại service app
+sudo systemctl restart nestjs-api
+```
+
+---
+
 ## ⏰ 5. Lập Lịch Tự Động Hóa Với Crontab
 
 **Cron** là tiến trình nền (Daemon) của Linux chuyên thực thi các tác vụ định kỳ theo thời gian biểu.
@@ -239,8 +447,11 @@ crontab -e
 Thêm dòng sau vào cuối cùng của file:
 
 ```cron
-# Tự động chạy backup vào lúc 02:00 sáng mỗi ngày và ghi log
+# Tùy chọn A: Dành cho máy chủ đơn ứng dụng (Single-App):
 0 2 * * * /opt/scripts/backup.sh >> /var/log/cron_backup_debug.log 2>&1
+
+# Tùy chọn B: Dành cho máy chủ đa ứng dụng (Multi-App Production):
+0 2 * * * /opt/scripts/backup-multi-apps.sh >> /var/log/cron_backup_debug.log 2>&1
 ```
 
 *Lưu file:* `Ctrl + O` $\rightarrow$ `Enter`, sau đó `Ctrl + X`.
@@ -270,7 +481,7 @@ Hãy cùng giả lập tình huống nguy cấp: **Database bị xóa nhầm ho�
     4. Kiểm tra toàn vẹn (Verify) ───┴──► SELECT COUNT(*) FROM users;
 ```
 
-### Các bước thực hành khôi phục:
+### 6.1. Thực Hành Khôi Phục Database (Restore Drill)
 
 1. **Giả lập xóa dữ liệu:**
    ```bash
@@ -292,6 +503,97 @@ Hãy cùng giả lập tình huống nguy cấp: **Database bị xóa nhầm ho�
    sudo -u postgres psql -d nestjs_db -c "\dt"
    ```
    $\rightarrow$ Toàn bộ các bảng dữ liệu đã quay trở lại nguyên vẹn!
+
+---
+
+### 🔍 6.2. Cây Thư Mục Cần Lưu Ý & Những File Cần Soi Khi Kiểm Chứng Backup
+
+Một bản sao lưu chỉ thực sự có giá trị khi nó được **kiểm chứng tính toàn vẹn (Verification)**. Dưới đây là cấu trúc thư mục toàn diện và các file trọng yếu cần giám sát:
+
+#### 1. Cây thư mục tổng thể vòng đời Backup trên máy chủ:
+
+```text
+UBUNTU SERVER ROOT (/)
+│
+├── 📂 /etc/                                  ◄── [NGUỒN CẤU HÌNH CẦN BACKUP]
+│   ├── nginx/
+│   │   ├── nginx.conf                        ──► Cấu hình chính của Web Server
+│   │   └── sites-available/                  ──► Cấu hình VirtualHost / Reverse Proxy từng app
+│   ├── letsencrypt/live/                     ──► Chứng chỉ HTTPS/SSL (fullchain.pem, privkey.pem)
+│   └── systemd/system/                       ──► File service chạy nền (*.service) của các app
+│
+├── 📂 /var/www/ (hoặc /home/ubuntu/apps/)     ◄── [NGUỒN MÃ NGUỒN & DỮ LIỆU APP]
+│   ├── nestjs-api/
+│   │   ├── .env                              ──► ⚠️ SỐNG CÒN: Biến môi trường, Secret Keys, DB Pass
+│   │   └── uploads/                          ──► File tài liệu, ảnh người dùng tải lên
+│   └── react-admin/
+│       └── dist/                             ──► Bản build tĩnh của frontend
+│
+├── 📂 /opt/scripts/                          ◄── [NƠI ĐẶT SCRIPT TỰ ĐỘNG HÓA]
+│   ├── backup.sh                             ──► Script backup đơn ứng dụng
+│   └── backup-multi-apps.sh                  ──► Script backup đa ứng dụng
+│
+├── 📂 /var/log/                              ◄── [NƠI SOI LỖI & THEO DÕI TIẾN TRÌNH]
+│   ├── server_backup.log                     ──► Log chạy script đơn lẻ
+│   ├── multi_app_backup.log                  ──► Log chạy script đa ứng dụng
+│   └── cron_backup_debug.log                 ──► Bắt toàn bộ lỗi Stderr từ tiến trình ngầm Crontab
+│
+└── 📂 /var/backups/                          ◄── [KHO LƯU TRỮ CÁC BẢN SAO LƯU]
+    ├── system_backups/                       ──► Lưu bản backup đơn ứng dụng
+    └── multi_apps/                           ──► Lưu bản backup đa ứng dụng
+        ├── apps/
+        │   ├── nestjs_api/
+        │   │   └── 2026-09-05_020000_nestjs_api.tar.gz
+        │   └── react_admin/
+        └── system_shared/
+            └── 2026-09-05_020000_system_configs.tar.gz
+```
+
+#### 2. Cấu trúc file bên trong một gói Backup (Sau khi giải nén ra thư mục tạm):
+
+```text
+/tmp/restore_test/
+└── nestjs_api/
+    ├── database_nest_prod_db.sql             ──► File Dump CSDL PostgreSQL/MySQL
+    └── source_code.tar.gz                    ──► Mã nguồn + uploads (ĐÃ LOẠI TRỪ node_modules, .git)
+        ├── .env                              ──► Bắt buộc phải có trong bản backup
+        ├── package.json
+        ├── uploads/                          ──► Dữ liệu người dùng tải lên
+        └── dist/
+```
+
+#### 3. Bảng danh sách các file cốt lõi cần xem khi kiểm chứng:
+
+| STT | File cần kiểm tra | Mục đích kiểm chứng | Dấu hiệu BẤT THƯỜNG cần cảnh giác |
+| :---: | :--- | :--- | :--- |
+| **1** | `/var/log/multi_app_backup.log`<br>hoặc `server_backup.log` | Xem chu trình backup có chạy đủ các bước và ghi nhận thành công | Xuất hiện log `ERROR`, `Permission denied`, `No space left on device` |
+| **2** | `/var/log/cron_backup_debug.log` | Kiểm tra lỗi phát sinh từ môi trường thực thi ngầm của Cron | Xuất hiện lỗi `command not found` (do thiếu `$PATH` trong Cron) |
+| **3** | File `*.tar.gz` (Kích thước file) | Xác minh file nén có dữ liệu thực tế hay không | File chỉ có kích thước **dưới 1 KB** $\rightarrow$ 99% lệnh dump DB hoặc nén đã lỗi |
+| **4** | `database_*.sql` (File dump CSDL) | Xác nhận cấu trúc bảng và dữ liệu SQL đầy đủ | File rỗng (0 bytes) hoặc thiếu dòng hoàn tất dump ở cuối file |
+| **5** | File `.env` (Biến môi trường) | Đảm bảo không bị thất lạc key bí mật, API token | File `.env` bị thiếu do cấu hình exclude nhầm |
+| **6** | `system_configs.tar.gz` | Đảm bảo lưu đủ cấu hình để dựng lại server mới | Thiếu thư mục `/etc/nginx` hoặc thư mục `/etc/letsencrypt` |
+
+#### 4. Lệnh kiểm tra nhanh 1 dòng (One-Liner Cheat Sheet):
+
+```bash
+# 1. Soi danh sách file bên trong gói nén mà KHÔNG cần giải nén ra đĩa:
+tar -ztvf /var/backups/multi_apps/apps/nestjs_api/2026-*_nestjs_api.tar.gz
+
+# 2. Kiểm tra dòng đầu và dòng cuối của file CSDL dump bên trong file nén:
+tar -zxvf /var/backups/multi_apps/apps/nestjs_api/2026-*_nestjs_api.tar.gz -O nestjs_api/database_*.sql | head -n 20
+tar -zxvf /var/backups/multi_apps/apps/nestjs_api/2026-*_nestjs_api.tar.gz -O nestjs_api/database_*.sql | tail -n 10
+# (Lưu ý: PostgreSQL luôn có dòng "-- PostgreSQL database dump complete" ở cuối, MySQL có "-- Dump completed on ...")
+
+# 3. Đếm số lượng bảng CSDL đã được sao lưu thành công:
+tar -zxvf /var/backups/multi_apps/apps/nestjs_api/2026-*_nestjs_api.tar.gz -O nestjs_api/database_*.sql | grep -c "CREATE TABLE"
+
+# 4. Soi 30 dòng nhật ký lỗi Cron gần nhất:
+tail -n 30 /var/log/cron_backup_debug.log
+
+# 5. Tạo và kiểm tra mã băm SHA256 chống hỏng file (Bit rot):
+sha256sum /var/backups/multi_apps/apps/nestjs_api/*.tar.gz > /var/backups/multi_apps/checksums.sha256
+sha256sum -c /var/backups/multi_apps/checksums.sha256
+```
 
 ---
 
