@@ -14,7 +14,7 @@ Sau khi hoàn thành phần này, bạn sẽ:
 3. **Thành thạo kỹ thuật Multi-Stage Build:** Đóng gói ứng dụng NestJS/TypeScript từ kích thước 1GB xuống chỉ còn **~120MB**, loại bỏ sạch rác và devDependencies.
 4. **Tối ưu hóa Dockerfile với `.dockerignore` & Non-root User:** Tăng tốc độ build gấp 5 lần và gia cố bảo mật (chạy bằng `USER node` thay vì root).
 5. **Làm chủ Docker CLI:** Tạo, chạy ngầm, gán cổng (Port Mapping), truyền biến môi trường, xem log và debug bên trong container.
-6. **Điều phối đa dịch vụ với Docker Compose:** Kết nối đồng bộ Backend NestJS + PostgreSQL Database + Redis Cache trên cùng một **Docker Bridge Network**.
+6. **Điều phối đa dịch vụ với Docker Compose:** Kết nối đồng bộ Nginx Gateway + Backend NestJS + PostgreSQL Database trên cùng một **Docker Bridge Network**.
 7. **Thiết lập giới hạn tài nguyên (Resource Limits):** Khống chế CPU và RAM để container không bao giờ chiếm dụng làm sập máy chủ.
 
 ---
@@ -223,31 +223,34 @@ curl http://127.0.0.1:3000/
 
 ## 🎼 5. Điều Phối Toàn Diện Với Docker Compose (Full-Stack Setup)
 
-Trong một hệ thống chuẩn, chúng ta kết hợp: **Nginx Reverse Proxy + NestJS App + PostgreSQL Database**.
+Trong môi trường Production hiện đại, chúng ta đóng gói toàn bộ hệ sinh thái: **Nginx Reverse Proxy Gateway + NestJS App + PostgreSQL Database** vào Docker Containers trên cùng một mạng ảo **Docker Bridge Network**.
 
 ```text
                                 MẠNG INTERNET
                                       │
-                                      │ (HTTP Port 80)
+                                      │ (HTTP Port 80 / HTTPS Port 443)
                                       ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                           UBUNTU SERVER VM                              │
 │                                                                         │
-│   ┌─────────────────────────────────────────────────────────────────┐   │
-│   │                 NGINX TRÊN HOST (Port 80)                       │   │
-│   │                 Chuyển tiếp tới localhost:3000                  │   │
-│   └─────────────────────────────────┬───────────────────────────────┘   │
-│                                     │                                   │
-│ ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┼ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐ │
-│   DOCKER BRIDGE NETWORK (app_net)   ▼                                   │
+│ ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐ │
+│   DOCKER BRIDGE NETWORK (app_network)                                   │
+│ │                                                                     │ │
+│   ┌───────────────────────────────────────────────────────────────┐     │
+│ │ │ CONTAINER: nginx_gateway (CỔNG VÀO DUY NHẤT MỞ RA NGOÀI HOST) │   │ │
+│   │ ──► Lắng nghe Port 80 & 443 từ Internet                       │     │
+│ │ │ ──► Reverse Proxy nội bộ tới Domain: "http://api_backend:3000"│   │ │
+│   └───────────────────────────────┬───────────────────────────────┘     │
+│ │                                 │                                   │ │
+│                                   ▼ (Giao tiếp nội bộ ảo)               │
 │ │ ┌───────────────────────────────────────────────────────────────┐   │ │
-│   │ CONTAINER: nestjs_app (Port 3000)                             │     │
+│   │ CONTAINER: api_backend (Port 3000 - KHÔNG CẦN MỞ RA HOST!)    │     │
 │ │ │ ──► Kết nối tới Database qua Domain: "postgres_db:5432"       │   │ │
-│   └─────────────────────────────────┬─────────────────────────────┘     │
-│ │                                   │                                 │ │
-│                                     ▼                                   │
+│   └───────────────────────────────┬───────────────────────────────┘     │
+│ │                                 │                                   │ │
+│                                   ▼ (Giao tiếp nội bộ ảo)               │
 │ │ ┌───────────────────────────────────────────────────────────────┐   │ │
-│   │ CONTAINER: postgres_db (Port 5432 - Không mở ra ngoài!)        │     │
+│   │ CONTAINER: postgres_db (Port 5432 - KHÔNG CẦN MỞ RA HOST!)    │     │
 │ │ │ ──► Gắn Named Volume: postgres_data                           │   │ │
 │   └───────────────────────────────────────────────────────────────┘     │
 │ └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘ │
@@ -255,20 +258,71 @@ Trong một hệ thống chuẩn, chúng ta kết hợp: **Nginx Reverse Proxy +
 ```
 
 > [!TIP]
-> **Khám phá dịch vụ nội bộ (Internal Service Discovery):**  
-> Trong cùng một Docker Network, các container giao tiếp với nhau bằng **Tên Service** (ví dụ: `postgres_db`) như một tên miền nội bộ, không cần quan tâm địa chỉ IP cụ thể của container là gì!
+> **Khám phá dịch vụ nội bộ (Internal Service Discovery) & Bảo mật Zero Exposure:**  
+> 1. Trong cùng một Docker Network, các container giao tiếp với nhau bằng **Tên Service** (ví dụ: `api_backend`, `postgres_db`) như tên miền nội bộ.
+> 2. **Bảo mật tối đa:** Cả `api_backend` (port 3000) và `postgres_db` (port 5432) **hoàn toàn không cần mở cổng ra máy chủ Host**. Chỉ duy nhất container `nginx_gateway` mở cổng 80/443 ra ngoài.
 
 ---
 
-### File `docker-compose.yml` Full-Stack Hoàn Chỉnh
+### Bước 5.1: Cấu trúc thư mục dự án
 
-Tạo file `docker-compose.yml` tại thư mục `~/apps/nestjs-api`:
+```text
+~/apps/nestjs-api/
+├── Dockerfile
+├── .dockerignore
+├── docker-compose.yml
+├── nginx/
+│   └── default.conf      ◄── File cấu hình Nginx Reverse Proxy
+└── src/
+```
+
+Tạo thư mục và file cấu hình cho Nginx:
+```bash
+mkdir -p ~/apps/nestjs-api/nginx
+nano ~/apps/nestjs-api/nginx/default.conf
+```
+
+Dán nội dung cấu hình Nginx Reverse Proxy:
+```nginx
+server {
+    listen 80;
+    server_name _;
+
+    # Giới hạn kích thước file upload
+    client_max_body_size 20M;
+
+    location / {
+        # ⚠️ CHÚ Ý: Dùng tên service "api_backend" thay vì "localhost"!
+        proxy_pass http://api_backend:3000;
+
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+```
+
+---
+
+### Bước 5.2: File `docker-compose.yml` Full-Stack Hoàn Chỉnh (3 Dịch Vụ)
+
+Chỉnh sửa file `~/apps/nestjs-api/docker-compose.yml`:
+```bash
+nano ~/apps/nestjs-api/docker-compose.yml
+```
+
+Dán nội dung sau:
 
 ```yaml
 version: '3.8'
 
 services:
-  # 1. DỊCH VỤ DATABASE
+  # 1. DỊCH VỤ DATABASE (Không mở cổng ra ngoài host)
   postgres_db:
     image: postgres:16-alpine
     container_name: postgres_db
@@ -287,15 +341,13 @@ services:
       timeout: 5s
       retries: 5
 
-  # 2. DỊCH VỤ BACKEND NESTJS
+  # 2. DỊCH VỤ BACKEND NESTJS (Không cần 'ports' ra host, chỉ mở nội bộ network)
   api_backend:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: nestjs_api_service
     restart: always
-    ports:
-      - "127.0.0.1:3000:3000" # Chỉ lắng nghe localhost
     environment:
       NODE_ENV: production
       PORT: 3000
@@ -306,12 +358,27 @@ services:
       DATABASE_NAME: nestjs_db
     depends_on:
       postgres_db:
-        condition: service_healthy # Chỉ khởi động sau khi Database đã hoàn toàn sẵn sàng
+        condition: service_healthy # Chỉ khởi động sau khi Database đã sẵn sàng
     deploy:
       resources:
         limits:
           cpus: '1.0'
           memory: 512M
+    networks:
+      - app_network
+
+  # 3. DỊCH VỤ NGINX REVERSE PROXY (Cửa ngõ duy nhất mở cổng ra Host)
+  nginx_gateway:
+    image: nginx:alpine
+    container_name: nginx_gateway
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - api_backend
     networks:
       - app_network
 
@@ -325,17 +392,26 @@ volumes:
 
 ---
 
-### Khởi chạy hệ thống Full-Stack bằng Docker Compose
+### Bước 5.3: Khởi chạy và kiểm tra hệ thống Full-Stack
+
+> [!WARNING]
+> **Xử lý xung đột cổng 80:** Nếu trước đó bạn đã cài Nginx trực tiếp trên máy chủ Ubuntu (Systemd), hãy dừng service này để nhường cổng 80 cho Nginx Container:
+> ```bash
+> sudo systemctl stop nginx && sudo systemctl disable nginx
+> ```
 
 ```bash
-# 1. Build và khởi chạy ngầm toàn bộ các dịch vụ
+# 1. Build và khởi chạy ngầm toàn bộ 3 dịch vụ
 docker compose up -d --build
 
-# 2. Kiểm tra tình trạng sức khỏe của các dịch vụ
+# 2. Kiểm tra trạng thái cả 3 container đang 'Up'
 docker compose ps
 
-# 3. Theo dõi log hợp nhất của cả App và DB
+# 3. Theo dõi log hợp nhất của cả Gateway, Backend và Database
 docker compose logs -f
+
+# 4. Kiểm tra phản hồi trực tiếp qua cổng 80
+curl -i http://localhost/
 ```
 
 ---
@@ -386,7 +462,7 @@ docker system df
 3. Viết `Dockerfile` Multi-Stage tối ưu hóa với `node:20-alpine`.
 4. Tiến hành build Docker Image: `docker build -t nestjs-api:v1.0 .`.
 5. Kiểm tra kích thước Image với `docker images` (xác nhận dung lượng < 150MB).
-6. Viết file `docker-compose.yml` kết nối NestJS Backend với PostgreSQL Database.
+6. Tạo file cấu hình `nginx/default.conf` và viết file `docker-compose.yml` kết nối Nginx Gateway + NestJS Backend + PostgreSQL Database.
 7. Khởi chạy toàn bộ hệ thống bằng `docker compose up -d`.
 8. Kiểm tra trạng thái container và healthcheck với `docker compose ps`.
 9. Kiểm tra kết nối từ máy Mac qua Nginx Reverse Proxy: `http://<IP_VM>/`.
